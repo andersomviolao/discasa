@@ -23,6 +23,8 @@ type ContextMenuState = {
 
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
+const MINIMIZE_TO_TRAY_KEY = "discasa.window.minimizeToTray";
+const CLOSE_TO_TRAY_KEY = "discasa.window.closeToTray";
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined") return fallback;
@@ -102,10 +104,13 @@ export function App() {
   const [draggedCollectionId, setDraggedCollectionId] = useState<string | null>(null);
   const [dragOverCollectionId, setDragOverCollectionId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+  const [minimizeToTray, setMinimizeToTray] = useState<boolean>(() => readStoredBoolean(MINIMIZE_TO_TRAY_KEY, false));
+  const [closeToTray, setCloseToTray] = useState<boolean>(() => readStoredBoolean(CLOSE_TO_TRAY_KEY, false));
 
   const dragDepthRef = useRef(0);
   const collectionsRef = useRef<CollectionRecord[]>([]);
   const reorderDirtyRef = useRef(false);
+  const closeToTrayRef = useRef(closeToTray);
 
   useEffect(() => {
     void bootstrap();
@@ -119,6 +124,17 @@ export function App() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, isSidebarCollapsed ? "1" : "0");
   }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(MINIMIZE_TO_TRAY_KEY, minimizeToTray ? "1" : "0");
+  }, [minimizeToTray]);
+
+  useEffect(() => {
+    closeToTrayRef.current = closeToTray;
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CLOSE_TO_TRAY_KEY, closeToTray ? "1" : "0");
+  }, [closeToTray]);
 
   useEffect(() => {
     if (!message && !error) return;
@@ -149,6 +165,32 @@ export function App() {
       window.removeEventListener("keydown", handleEscape);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    void appWindow.onCloseRequested(async (event) => {
+      if (!closeToTrayRef.current) return;
+
+      event.preventDefault();
+
+      try {
+        await appWindow.hide();
+        setMessage("Discasa enviado para a bandeja.");
+        setError("");
+      } catch {
+        setError("Não foi possível enviar o app para a bandeja.");
+      }
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   async function bootstrap(): Promise<void> {
     setIsBusy(true);
@@ -316,9 +358,16 @@ export function App() {
 
   async function handleMinimize(): Promise<void> {
     try {
+      if (minimizeToTray) {
+        await appWindow.hide();
+        setMessage("Discasa enviado para a bandeja.");
+        setError("");
+        return;
+      }
+
       await appWindow.minimize();
     } catch {
-      setMessage("A minimização só funciona no app Tauri.");
+      setError("Não foi possível minimizar o app.");
     }
   }
 
@@ -334,9 +383,16 @@ export function App() {
 
   async function handleClose(): Promise<void> {
     try {
-      await appWindow.close();
+      if (closeToTrayRef.current) {
+        await appWindow.hide();
+        setMessage("Discasa enviado para a bandeja.");
+        setError("");
+        return;
+      }
+
+      await appWindow.destroy();
     } catch {
-      setError("O botão fechar só funciona dentro do app Tauri.");
+      setError("Não foi possível fechar o app.");
     }
   }
 
@@ -546,6 +602,44 @@ export function App() {
                   <button className="primary-button" onClick={openDiscordLogin}>
                     Login with Discord
                   </button>
+                </div>
+
+                <div className="settings-card">
+                  <div className="settings-label">Janela</div>
+
+                  <label className="settings-toggle" htmlFor="minimize-to-tray">
+                    <div className="settings-toggle-copy">
+                      <span className="settings-toggle-title">Minimizar para a bandeja</span>
+                      <span className="settings-toggle-description">
+                        Ao minimizar, esconder o app na área de notificação.
+                      </span>
+                    </div>
+                    <input
+                      id="minimize-to-tray"
+                      className="settings-switch-input"
+                      type="checkbox"
+                      checked={minimizeToTray}
+                      onChange={(event) => setMinimizeToTray(event.currentTarget.checked)}
+                    />
+                    <span className="settings-switch" aria-hidden="true" />
+                  </label>
+
+                  <label className="settings-toggle" htmlFor="close-to-tray">
+                    <div className="settings-toggle-copy">
+                      <span className="settings-toggle-title">Fechar para a bandeja</span>
+                      <span className="settings-toggle-description">
+                        Ao fechar, manter o app rodando em segundo plano na bandeja.
+                      </span>
+                    </div>
+                    <input
+                      id="close-to-tray"
+                      className="settings-switch-input"
+                      type="checkbox"
+                      checked={closeToTray}
+                      onChange={(event) => setCloseToTray(event.currentTarget.checked)}
+                    />
+                    <span className="settings-switch" aria-hidden="true" />
+                  </label>
                 </div>
 
                 <button className="secondary-button" onClick={() => setPage("library")}>Voltar</button>

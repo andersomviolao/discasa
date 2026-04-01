@@ -1,7 +1,7 @@
 {
   "name": "@discasa/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@discasa/shared": "0.1.0",
+    "@discasa/shared": "0.0.0",
     "@tauri-apps/api": "^2.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"

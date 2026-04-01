@@ -108,8 +108,8 @@ img {
   width: 48px;
   height: 48px;
   border-radius: 999px;
-  object-fit: cover;
-  background: #ffffff;
+  object-fit: contain;
+  background: transparent;
 }
 
 .brand-name {
@@ -604,7 +604,6 @@ img {
   color: #ff8a8a;
 }
 
-
 .context-menu {
   position: fixed;
   z-index: 50;
@@ -656,6 +655,77 @@ img {
 .context-menu-item.danger:hover {
   background: rgba(123, 34, 41, 0.24);
   color: #ffd0d2;
+}
+
+.settings-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.settings-toggle + .settings-toggle {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-toggle-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.settings-toggle-description {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.56);
+  max-width: 320px;
+}
+
+.settings-switch-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.settings-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  transition: background 0.18s ease;
+}
+
+.settings-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+  transition: transform 0.18s ease;
+}
+
+.settings-switch-input:checked + .settings-switch {
+  background: #6683ef;
+}
+
+.settings-switch-input:checked + .settings-switch::after {
+  transform: translateX(18px);
 }
 
 .albums-scroll::-webkit-scrollbar,

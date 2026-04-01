@@ -1,0 +1,10 @@
+# Node dependencies
+node_modules/
+
+# Rust / Tauri build artifacts
+target/
+**/target/
+apps/desktop/src-tauri/target/
+
+# Local mock data
+apps/server/.discasa-data/

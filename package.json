@@ -1,0 +1,19 @@
+{
+  "name": "discasa",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:desktop": "npm --workspace @discasa/desktop run dev",
+    "dev:server": "npm --workspace @discasa/server run dev",
+    "build:desktop": "npm --workspace @discasa/desktop run build",
+    "build:server": "npm --workspace @discasa/server run build",
+    "check": "npm --workspace @discasa/desktop run check && npm --workspace @discasa/server run check"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

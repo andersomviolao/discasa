@@ -23,6 +23,7 @@
   --sidebar-collapsed-width: 50px;
   --round-control-size: 26px;
   --round-control-icon-size: 12px;
+  --sidebar-icon-size: 14px;
   --workspace-gap: 20px;
   --workspace-padding-x: 20px;
   --workspace-padding-bottom: 20px;
@@ -296,8 +297,8 @@ img {
 }
 
 .sidebar-toggle-button svg {
-  width: var(--round-control-icon-size);
-  height: var(--round-control-icon-size);
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
 }
 
 .sidebar-scroll {
@@ -348,16 +349,16 @@ img {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  min-width: 20px;
-  height: 20px;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
   color: var(--accent-color);
   transform: translateY(0.5px);
 }
 
 .sidebar-item-icon svg {
-  width: var(--round-control-icon-size);
-  height: var(--round-control-icon-size);
+  width: var(--sidebar-icon-size);
+  height: var(--sidebar-icon-size);
   display: block;
 }
 

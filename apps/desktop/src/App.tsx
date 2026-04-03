@@ -1100,8 +1100,8 @@ export function App() {
               <div className="profile-avatar" aria-hidden="true" />
               {!isSidebarCollapsed ? (
                 <div className="profile-copy">
-                  <strong>{profile.nickname}</strong>
-                  <span>{profile.server}</span>
+                  <span className="profile-primary">{profile.nickname}</span>
+                  <span className="profile-secondary">{profile.server}</span>
                 </div>
               ) : null}
             </footer>
@@ -1149,7 +1149,7 @@ export function App() {
                     </span>
                   </div>
                   <div className="file-meta">
-                    <strong>{item.name}</strong>
+                    <span className="file-name">{item.name}</span>
                     <small>{new Intl.NumberFormat("en-US").format(item.size)} bytes</small>
                     {renderCardActions(item)}
                   </div>
@@ -1162,16 +1162,16 @@ export function App() {
                   className="empty-state"
                   onClick={() => document.getElementById("discasa-upload-input")?.click()}
                 >
-                  <strong>No files yet.</strong>
-                  <span>Drag files from Explorer into this area or click to upload.</span>
+                  <span className="empty-state-title">No files yet.</span>
+                  <span className="empty-state-copy">Drag files from Explorer into this area or click to upload.</span>
                 </button>
               ) : null}
             </div>
 
             {isDraggingFiles ? (
               <div className="drop-overlay">
-                <strong>Drop files here</strong>
-                <span>They will be added to the current view.</span>
+                <span className="drop-overlay-title">Drop files here</span>
+                <span className="drop-overlay-copy">They will be added to the current view.</span>
               </div>
             ) : null}
           </main>
@@ -1234,8 +1234,8 @@ export function App() {
               <div className="settings-modal-profile">
                 <div className="settings-modal-avatar" aria-hidden="true" />
                 <div className="settings-modal-profile-copy">
-                  <strong>{profile.nickname}</strong>
-                  <span>{profile.server}</span>
+                  <span className="settings-profile-primary">{profile.nickname}</span>
+                  <span className="settings-profile-secondary">{profile.server}</span>
                 </div>
               </div>
 

@@ -13,6 +13,7 @@ export type AppSession = {
   user: {
     id: string;
     username: string;
+    avatarUrl?: string | null;
   } | null;
 };
 

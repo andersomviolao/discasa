@@ -155,7 +155,7 @@ export function SettingsModal({
 
   return (
     <div className="settings-modal-root" role="dialog" aria-modal="true" aria-label="Discasa settings">
-      <button type="button" className="settings-modal-backdrop" aria-label="Close settings" onClick={onClose} />
+      <div className="settings-modal-backdrop" aria-hidden="true" />
 
       <div className="settings-modal">
         <aside className="settings-modal-sidebar">

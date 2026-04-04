@@ -17,25 +17,15 @@ import {
   uploadFiles,
 } from "./lib/api";
 import logoUrl from "./assets/discasa-logo.png";
-import defaultAvatarUrl from "./assets/discasa-default-avatar.png";
-
-type SettingsSection = "discord" | "appearance" | "window";
-type WindowState = "default" | "maximized";
-
-type FixedLibraryViewId = "all-files" | "favorites" | "trash";
-type FixedCollectionViewId = "pictures" | "videos" | "others";
-
-type SidebarView =
-  | { kind: "library"; id: FixedLibraryViewId }
-  | { kind: "collection"; id: FixedCollectionViewId }
-  | { kind: "album"; id: string };
-
-type AlbumContextMenuState = {
-  x: number;
-  y: number;
-  albumId: string;
-  albumName: string;
-} | null;
+import { AlbumContextMenu } from "./components/AlbumContextMenu";
+import { AlbumModal } from "./components/AlbumModal";
+import { LibraryPanel } from "./components/LibraryPanel";
+import { SettingsModal } from "./components/SettingsModal";
+import { Sidebar } from "./components/Sidebar";
+import { StatusToast } from "./components/StatusToast";
+import { Titlebar } from "./components/Titlebar";
+import { DEFAULT_PROFILE, getCurrentDescription, getCurrentTitle, getVisibleItems } from "./lib/library-helpers";
+import type { AlbumContextMenuState, SettingsSection, SidebarView, WindowState } from "./ui-types";
 
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
@@ -43,11 +33,6 @@ const MINIMIZE_TO_TRAY_KEY = "discasa.window.minimizeToTray";
 const CLOSE_TO_TRAY_KEY = "discasa.window.closeToTray";
 const ACCENT_COLOR_KEY = "discasa.ui.accentColor";
 const DEFAULT_ACCENT_HEX = "#E9881D";
-
-const DEFAULT_PROFILE = {
-  nickname: "discord-nick",
-  server: "discord-server",
-};
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
   if (typeof window === "undefined") return fallback;
@@ -70,6 +55,7 @@ function normalizeHexColor(value: string): string | null {
       .split("")
       .map((character) => `${character}${character}`)
       .join("");
+
     return `#${expanded.toUpperCase()}`;
   }
 
@@ -100,152 +86,6 @@ function tintHexColor(hex: string, amount: number): string {
   return `#${tinted.join("").toUpperCase()}`;
 }
 
-function isImage(item: LibraryItem): boolean {
-  return item.mimeType.startsWith("image/");
-}
-
-function isVideo(item: LibraryItem): boolean {
-  return item.mimeType.startsWith("video/");
-}
-
-function isOther(item: LibraryItem): boolean {
-  return !isImage(item) && !isVideo(item);
-}
-
-function LibraryIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M4.75 7.25A1.75 1.75 0 0 1 6.5 5.5h5.2c.41 0 .8.16 1.09.45l1.16 1.15c.17.17.39.27.63.27h2.92a1.75 1.75 0 0 1 1.75 1.75v6.38a1.75 1.75 0 0 1-1.75 1.75h-11A1.75 1.75 0 0 1 4.75 15.5v-8.25Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M8 11.5h8.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M8 14.5h5.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function HeartIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M12 20.55 10.55 19.22C5.4 14.54 2 11.46 2 7.7 2 4.76 4.3 2.5 7.2 2.5c1.64 0 3.22.76 4.25 1.96 1.03-1.2 2.61-1.96 4.25-1.96 2.9 0 5.2 2.26 5.2 5.2 0 3.76-3.4 6.84-8.55 11.52L12 20.55Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function TrashIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5.5 7.25h13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M9 7.25V5.8c0-.72.58-1.3 1.3-1.3h3.4c.72 0 1.3.58 1.3 1.3v1.45" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M7.6 7.25v10.05c0 .66.54 1.2 1.2 1.2h6.4c.66 0 1.2-.54 1.2-1.2V7.25" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M10 10.25v4.5M14 10.25v4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function PictureIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4.75" y="6.25" width="14.5" height="11.5" rx="1.75" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="m7.8 14.75 2.28-2.6c.25-.29.7-.31.99-.05l1.58 1.42 1.49-1.78c.28-.33.8-.36 1.12-.07l2 1.82" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="9" cy="9.8" r="1.1" fill="currentColor" />
-    </svg>
-  );
-}
-
-function VideoIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <rect x="4.75" y="6.25" width="10.5" height="11.5" rx="1.75" fill="none" stroke="currentColor" strokeWidth="1.6" />
-      <path d="m15.25 10.15 3.7-2.1v7.9l-3.7-2.1" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function FolderIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M4.75 7.25A1.75 1.75 0 0 1 6.5 5.5h4.1c.44 0 .85.18 1.16.48l1.06 1.03c.18.18.43.29.69.29h4a1.75 1.75 0 0 1 1.75 1.75v6.45a1.75 1.75 0 0 1-1.75 1.75h-11A1.75 1.75 0 0 1 4.75 15.5v-8.25Z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function PlusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 5.5v13M5.5 12h13" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ChevronLeftDoubleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m13.5 6-6 6 6 6M19 6l-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function ChevronRightDoubleIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="m10.5 6 6 6-6 6M5 6l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M19.14 12.94a7.43 7.43 0 0 0 .05-.94 7.43 7.43 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.6 7.6 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.49-.42h-3.84a.5.5 0 0 0-.49.42l-.36 2.54c-.58.22-1.12.53-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.43 7.43 0 0 0-.05.94c0 .32.02.63.05.94L2.83 14.52a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.41 1.05.72 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.84a.5.5 0 0 0 .49-.42l.36-2.54c.58-.22 1.12-.53 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z" fill="currentColor" />
-    </svg>
-  );
-}
-
-function UploadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M12 15.75V6.25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-      <path d="m8.5 9.75 3.5-3.5 3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.75 16.25v1a1.5 1.5 0 0 0 1.5 1.5h9.5a1.5 1.5 0 0 0 1.5-1.5v-1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ProfileAvatar({ avatarUrl, className }: { avatarUrl: string | null; className: string }) {
-  const [hasImageError, setHasImageError] = useState(false);
-
-  useEffect(() => {
-    setHasImageError(false);
-  }, [avatarUrl]);
-
-  const showDiscordAvatar = Boolean(avatarUrl) && !hasImageError;
-
-  return (
-    <div className={`${className} ui-avatar ${showDiscordAvatar ? "has-discord-avatar" : "has-default-avatar"}`} aria-hidden="true">
-      {showDiscordAvatar ? (
-        <img src={avatarUrl ?? undefined} alt="" className="ui-avatar-image" onError={() => setHasImageError(true)} />
-      ) : (
-        <div className="ui-avatar-fallback">
-          <span className="ui-avatar-fallback-background" />
-          <img src={defaultAvatarUrl} alt="" className="ui-avatar-fallback-image" />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateAlbumOpen, setIsCreateAlbumOpen] = useState(false);
@@ -274,6 +114,7 @@ export function App() {
   const dragDepthRef = useRef(0);
   const closeToTrayRef = useRef(closeToTray);
   const createAlbumInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const albumsRef = useRef<AlbumRecord[]>([]);
 
   useEffect(() => {
@@ -296,6 +137,7 @@ export function App() {
 
   useEffect(() => {
     closeToTrayRef.current = closeToTray;
+
     if (typeof window === "undefined") return;
     window.localStorage.setItem(CLOSE_TO_TRAY_KEY, closeToTray ? "1" : "0");
   }, [closeToTray]);
@@ -359,10 +201,12 @@ export function App() {
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+
       if (isCreateAlbumOpen) {
         closeCreateAlbumModal();
         return;
       }
+
       if (isSettingsOpen) {
         setIsSettingsOpen(false);
       }
@@ -408,11 +252,7 @@ export function App() {
     setError("");
 
     try {
-      const [session, nextAlbums, nextItems] = await Promise.all([
-        getSession(),
-        getAlbums(),
-        getLibraryItems(),
-      ]);
+      const [session, nextAlbums, nextItems] = await Promise.all([getSession(), getAlbums(), getLibraryItems()]);
 
       setSessionName(session.user?.username ?? null);
       setSessionAvatarUrl(session.user?.avatarUrl ?? null);
@@ -434,68 +274,9 @@ export function App() {
     [sessionAvatarUrl, sessionName],
   );
 
-  const visibleItems = useMemo(() => {
-    switch (selectedView.kind) {
-      case "library":
-        if (selectedView.id === "all-files") {
-          return items.filter((item) => !item.isTrashed);
-        }
-
-        if (selectedView.id === "favorites") {
-          return items.filter((item) => item.isFavorite && !item.isTrashed);
-        }
-
-        return items.filter((item) => item.isTrashed);
-      case "collection":
-        if (selectedView.id === "pictures") {
-          return items.filter((item) => !item.isTrashed && isImage(item));
-        }
-
-        if (selectedView.id === "videos") {
-          return items.filter((item) => !item.isTrashed && isVideo(item));
-        }
-
-        return items.filter((item) => !item.isTrashed && isOther(item));
-      case "album":
-        return items.filter((item) => !item.isTrashed && item.albumIds.includes(selectedView.id));
-      default:
-        return [];
-    }
-  }, [items, selectedView]);
-
-  const currentTitle = useMemo(() => {
-    switch (selectedView.kind) {
-      case "library":
-        if (selectedView.id === "all-files") return "All Files";
-        if (selectedView.id === "favorites") return "Favorites";
-        return "Trash";
-      case "collection":
-        if (selectedView.id === "pictures") return "Pictures";
-        if (selectedView.id === "videos") return "Videos";
-        return "Others";
-      case "album":
-        return albums.find((album) => album.id === selectedView.id)?.name ?? "Album";
-      default:
-        return "Library";
-    }
-  }, [albums, selectedView]);
-
-  const currentDescription = useMemo(() => {
-    switch (selectedView.kind) {
-      case "library":
-        if (selectedView.id === "all-files") return "All active files in the library.";
-        if (selectedView.id === "favorites") return "Files marked as favorites.";
-        return "Items moved to the trash.";
-      case "collection":
-        if (selectedView.id === "pictures") return "Image files only.";
-        if (selectedView.id === "videos") return "Video files only.";
-        return "Files that are neither images nor videos.";
-      case "album":
-        return "Files linked to this album.";
-      default:
-        return "";
-    }
-  }, [selectedView]);
+  const visibleItems = useMemo(() => getVisibleItems(items, selectedView), [items, selectedView]);
+  const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
+  const currentDescription = useMemo(() => getCurrentDescription(selectedView), [selectedView]);
 
   function updateItemInState(nextItem: LibraryItem): void {
     setItems((current) => current.map((item) => (item.id === nextItem.id ? nextItem : item)));
@@ -521,6 +302,12 @@ export function App() {
     setAlbumContextMenu(null);
   }
 
+  function openSettingsModal(): void {
+    setAlbumContextMenu(null);
+    setSettingsSection("discord");
+    setIsSettingsOpen(true);
+  }
+
   function openCreateAlbumModal(): void {
     setAlbumContextMenu(null);
     setCreateAlbumError("");
@@ -533,6 +320,10 @@ export function App() {
     setIsCreateAlbumOpen(false);
     setCreateAlbumError("");
     setNewAlbumName("");
+  }
+
+  function requestUpload(): void {
+    uploadInputRef.current?.click();
   }
 
   async function handleCreateAlbumSubmit(event?: FormEvent<HTMLFormElement>): Promise<void> {
@@ -571,9 +362,7 @@ export function App() {
     try {
       const trimmed = nextName.trim();
       await renameAlbum(albumId, { name: trimmed });
-      const nextAlbums = albumsRef.current.map((album) =>
-        album.id === albumId ? { ...album, name: trimmed } : album,
-      );
+      const nextAlbums = albumsRef.current.map((album) => (album.id === albumId ? { ...album, name: trimmed } : album));
       albumsRef.current = nextAlbums;
       setAlbums(nextAlbums);
       setAlbumContextMenu(null);
@@ -623,11 +412,7 @@ export function App() {
           albumIds: item.albumIds.filter((id) => id !== albumId),
         })),
       );
-      setSelectedView((current) =>
-        current.kind === "album" && current.id === albumId
-          ? { kind: "library", id: "all-files" }
-          : current,
-      );
+      setSelectedView((current) => (current.kind === "album" && current.id === albumId ? { kind: "library", id: "all-files" } : current));
       setAlbumContextMenu(null);
       setMessage(`Album deleted: ${albumName}`);
       setError("");
@@ -810,6 +595,7 @@ export function App() {
   function handleFileDragOver(event: DragEvent<HTMLElement>): void {
     event.preventDefault();
     event.stopPropagation();
+
     if (!isDraggingFiles) {
       setIsDraggingFiles(true);
     }
@@ -829,509 +615,119 @@ export function App() {
     setAlbumContextMenu({ x: event.clientX, y: event.clientY, albumId, albumName });
   }
 
-  function renderCardActions(item: LibraryItem) {
-    if (item.isTrashed) {
-      return (
-        <div className="file-actions">
-          <button type="button" className="file-action-button" onClick={() => void handleRestoreFromTrash(item.id)}>
-            Restore
-          </button>
-          <button type="button" className="file-action-button danger" onClick={() => void handleDeleteItem(item.id)}>
-            Delete
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <div className="file-actions">
-        <button type="button" className={`file-action-button ${item.isFavorite ? "active" : ""}`} onClick={() => void handleToggleFavorite(item.id)}>
-          {item.isFavorite ? "Unfavorite" : "Favorite"}
-        </button>
-        <button type="button" className="file-action-button" onClick={() => void handleMoveToTrash(item.id)}>
-          Trash
-        </button>
-      </div>
-    );
-  }
-
-  function closeSettingsModal(): void {
-    setIsSettingsOpen(false);
-  }
-
-  function renderSettingsModalContent() {
-    if (settingsSection === "discord") {
-      return (
-        <>
-          <div className="settings-modal-header">
-            <div>
-              <h2>Discord</h2>
-              <p>Connect your account to sync Discasa identity data in the future.</p>
-            </div>
-          </div>
-
-          <div className="settings-card">
-            <div className={`settings-status ${sessionName ? "connected" : "disconnected"}`}>
-              {sessionName ? "Connected" : "Not connected"}
-            </div>
-            <button className="primary-button" onClick={openDiscordLogin}>
-              Login with Discord
-            </button>
-          </div>
-        </>
-      );
-    }
-
-    if (settingsSection === "appearance") {
-      return (
-        <>
-          <div className="settings-modal-header">
-            <div>
-              <h2>Appearance</h2>
-              <p>Choose the accent color used by the colored elements across the interface.</p>
-            </div>
-          </div>
-
-          <div className="settings-card">
-            <div className="settings-field-stack">
-              <label className="settings-input-label" htmlFor="accent-hex">
-                Accent color (HEX)
-              </label>
-              <div className="settings-color-row">
-                <span className="settings-color-preview" aria-hidden="true" style={{ backgroundColor: accentColor }} />
-                <input
-                  id="accent-hex"
-                  className="settings-text-input"
-                  type="text"
-                  inputMode="text"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="#E9881D"
-                  value={accentInput}
-                  onChange={(event) => handleAccentInputChange(event.currentTarget.value)}
-                  onBlur={handleAccentInputBlur}
-                />
-              </div>
-              <span className={`settings-input-help ${accentInputError ? "error" : ""}`}>
-                {accentInputError || "A nova cor é aplicada assim que o HEX fica válido."}
-              </span>
-            </div>
-          </div>
-        </>
-      );
-    }
-
-    return (
-      <>
-        <div className="settings-modal-header">
-          <div>
-            <h2>Window</h2>
-            <p>Choose how Discasa behaves when minimizing or closing.</p>
-          </div>
-        </div>
-
-        <div className="settings-card">
-
-          <label className="settings-toggle" htmlFor="minimize-to-tray">
-            <div className="settings-toggle-copy">
-              <span className="settings-toggle-title">Minimize to tray</span>
-              <span className="settings-toggle-description">
-                When minimizing, hide the app in the system tray.
-              </span>
-            </div>
-            <input
-              id="minimize-to-tray"
-              className="settings-switch-input"
-              type="checkbox"
-              checked={minimizeToTray}
-              onChange={(event) => setMinimizeToTray(event.currentTarget.checked)}
-            />
-            <span className="settings-switch" aria-hidden="true" />
-          </label>
-
-          <label className="settings-toggle" htmlFor="close-to-tray">
-            <div className="settings-toggle-copy">
-              <span className="settings-toggle-title">Close to tray</span>
-              <span className="settings-toggle-description">
-                When closing, keep the app running in the system tray.
-              </span>
-            </div>
-            <input
-              id="close-to-tray"
-              className="settings-switch-input"
-              type="checkbox"
-              checked={closeToTray}
-              onChange={(event) => setCloseToTray(event.currentTarget.checked)}
-            />
-            <span className="settings-switch" aria-hidden="true" />
-          </label>
-        </div>
-      </>
-    );
-  }
-
   return (
     <div className="app-shell">
       <div className={`app-frame ${windowState === "maximized" ? "window-maximized" : ""}`}>
-        <header className="titlebar">
-          <div className="titlebar-drag-surface" aria-hidden="true" onMouseDown={(event) => { void handleStartDragging(event); }} />
-
-          <div className="brand">
-            <img src={logoUrl} alt="Discasa" className="brand-logo" />
-            <span className="brand-name">Discasa</span>
-          </div>
-
-          <div className="window-controls">
-            <button
-              type="button"
-              className="window-button"
-              onClick={() => {
-                setAlbumContextMenu(null);
-                setSettingsSection("discord");
-                setIsSettingsOpen(true);
-              }}
-              aria-label="Open settings"
-              title="Open settings"
-            >
-              <span className="window-glyph icon-glyph">
-                <SettingsIcon />
-              </span>
-            </button>
-            <button type="button" className="window-button" onClick={() => void handleMinimize()} aria-label="Minimize">
-              <span className="window-glyph minimize" />
-            </button>
-            <button type="button" className="window-button" onClick={() => void handleToggleMaximize()} aria-label="Maximize or restore">
-              <span className="window-glyph maximize" />
-            </button>
-            <button type="button" className="window-button close-button" onClick={() => void handleClose()} aria-label="Close">
-              <span className="window-glyph close" />
-            </button>
-          </div>
-        </header>
+        <Titlebar
+          logoUrl={logoUrl}
+          windowState={windowState}
+          onDragStart={handleStartDragging}
+          onOpenSettings={openSettingsModal}
+          onMinimize={handleMinimize}
+          onToggleMaximize={handleToggleMaximize}
+          onClose={handleClose}
+        />
 
         <div className="workspace">
-          <aside className={`sidebar-panel ${isSidebarCollapsed ? "collapsed" : ""}`}>
-            <div className="sidebar-topbar">
-              <button
-                type="button"
-                className="sidebar-toggle-button"
-                onClick={() => setIsSidebarCollapsed((current) => !current)}
-                aria-label={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-                title={isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-              >
-                {isSidebarCollapsed ? <ChevronRightDoubleIcon /> : <ChevronLeftDoubleIcon />}
-              </button>
-            </div>
+          <Sidebar
+            albums={albums}
+            selectedView={selectedView}
+            isSidebarCollapsed={isSidebarCollapsed}
+            profile={profile}
+            onToggleSidebar={() => setIsSidebarCollapsed((current) => !current)}
+            onOpenView={openLibraryView}
+            onOpenCreateAlbum={openCreateAlbumModal}
+            onOpenAlbumContextMenu={handleAlbumContextMenu}
+          />
 
-            <div className="sidebar-scroll">
-              <section className="sidebar-section">
-                {!isSidebarCollapsed ? <h2 className="sidebar-section-title">Library</h2> : null}
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "library" && selectedView.id === "all-files" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "library", id: "all-files" })}
-                  title="All Files"
-                >
-                  <span className="sidebar-item-icon"><LibraryIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">All Files</span> : null}
-                </button>
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "library" && selectedView.id === "favorites" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "library", id: "favorites" })}
-                  title="Favorites"
-                >
-                  <span className="sidebar-item-icon"><HeartIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">Favorites</span> : null}
-                </button>
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "library" && selectedView.id === "trash" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "library", id: "trash" })}
-                  title="Trash"
-                >
-                  <span className="sidebar-item-icon"><TrashIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">Trash</span> : null}
-                </button>
-              </section>
-
-              <section className="sidebar-section">
-                {!isSidebarCollapsed ? <h2 className="sidebar-section-title">Collections</h2> : null}
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "collection" && selectedView.id === "pictures" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "collection", id: "pictures" })}
-                  title="Pictures"
-                >
-                  <span className="sidebar-item-icon"><PictureIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">Pictures</span> : null}
-                </button>
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "collection" && selectedView.id === "videos" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "collection", id: "videos" })}
-                  title="Videos"
-                >
-                  <span className="sidebar-item-icon"><VideoIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">Videos</span> : null}
-                </button>
-
-                <button
-                  type="button"
-                  className={`sidebar-item ${selectedView.kind === "collection" && selectedView.id === "others" ? "selected" : ""}`}
-                  onClick={() => openLibraryView({ kind: "collection", id: "others" })}
-                  title="Others"
-                >
-                  <span className="sidebar-item-icon"><FolderIcon /></span>
-                  {!isSidebarCollapsed ? <span className="sidebar-item-label">Others</span> : null}
-                </button>
-              </section>
-
-              <section className="sidebar-section album-section">
-                {!isSidebarCollapsed ? <h2 className="sidebar-section-title">Albums</h2> : null}
-
-                {albums.map((album) => (
-                  <button
-                    key={album.id}
-                    type="button"
-                    className={`sidebar-item ${selectedView.kind === "album" && selectedView.id === album.id ? "selected" : ""}`}
-                    onClick={() => openLibraryView({ kind: "album", id: album.id })}
-                    onContextMenu={(event) => handleAlbumContextMenu(event, album.id, album.name)}
-                    title={album.name}
-                  >
-                    <span className="sidebar-item-icon"><FolderIcon /></span>
-                    {!isSidebarCollapsed ? <span className="sidebar-item-label">{album.name}</span> : null}
-                  </button>
-                ))}
-
-                <button
-                  type="button"
-                  className={`sidebar-item add-album-item ${albums.length === 0 ? "empty-slot" : ""}`}
-                  onClick={openCreateAlbumModal}
-                  title="Create album"
-                >
-                  <span className="sidebar-item-icon"><PlusIcon /></span>
-                </button>
-              </section>
-            </div>
-
-            <footer className="sidebar-profile">
-              <ProfileAvatar avatarUrl={profile.avatarUrl} className="profile-avatar" />
-              {!isSidebarCollapsed ? (
-                <div className="profile-copy">
-                  <span className="profile-primary">{profile.nickname}</span>
-                  <span className="profile-secondary">{profile.server}</span>
-                </div>
-              ) : null}
-            </footer>
-          </aside>
-
-          <main
-            className={`library-panel ${isDraggingFiles ? "dragging" : ""}`}
+          <LibraryPanel
+            title={currentTitle}
+            description={currentDescription}
+            items={visibleItems}
+            isBusy={isBusy}
+            isDraggingFiles={isDraggingFiles}
+            onRequestUpload={requestUpload}
             onDragEnter={handleFileDragEnter}
             onDragLeave={handleFileDragLeave}
             onDragOver={handleFileDragOver}
-            onDrop={(event) => { void handleFileDrop(event); }}
-          >
-            <div className="library-header">
-              <div>
-                <h1>{currentTitle}</h1>
-                <p>{currentDescription}</p>
-              </div>
-              <button
-                type="button"
-                className="upload-button"
-                onClick={() => document.getElementById("discasa-upload-input")?.click()}
-                aria-label="Upload"
-                title="Upload"
-              >
-                <UploadIcon />
-              </button>
-              <input
-                id="discasa-upload-input"
-                className="hidden-upload-input"
-                type="file"
-                multiple
-                onChange={(event) => {
-                  void handleFiles(event.currentTarget.files);
-                  event.currentTarget.value = "";
-                }}
-              />
-            </div>
-
-            <div className="files-grid">
-              {visibleItems.map((item) => (
-                <article key={item.id} className="file-card" title={item.name}>
-                  <div className="file-preview">
-                    <span className="file-type-chip">
-                      {item.isTrashed ? "TRASH" : isImage(item) ? "IMG" : isVideo(item) ? "VID" : "FILE"}
-                    </span>
-                  </div>
-                  <div className="file-meta">
-                    <span className="file-name">{item.name}</span>
-                    <small className="file-size">{new Intl.NumberFormat("en-US").format(item.size)} bytes</small>
-                    {renderCardActions(item)}
-                  </div>
-                </article>
-              ))}
-
-              {visibleItems.length === 0 && !isBusy ? (
-                <button
-                  type="button"
-                  className="empty-state"
-                  onClick={() => document.getElementById("discasa-upload-input")?.click()}
-                >
-                  <span className="empty-state-title">No files yet.</span>
-                  <span className="empty-state-copy">Drag files from Explorer into this area or click to upload.</span>
-                </button>
-              ) : null}
-            </div>
-
-            {isDraggingFiles ? (
-              <div className="drop-overlay">
-                <span className="drop-overlay-title">Drop files here</span>
-                <span className="drop-overlay-copy">They will be added to the current view.</span>
-              </div>
-            ) : null}
-          </main>
+            onDrop={handleFileDrop}
+            onToggleFavorite={handleToggleFavorite}
+            onMoveToTrash={handleMoveToTrash}
+            onRestoreFromTrash={handleRestoreFromTrash}
+            onDeleteItem={handleDeleteItem}
+          />
         </div>
       </div>
 
+      <input
+        ref={uploadInputRef}
+        id="discasa-upload-input"
+        className="hidden-upload-input"
+        type="file"
+        multiple
+        onChange={(event) => {
+          void handleFiles(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
+
       {isCreateAlbumOpen ? (
-        <div className="album-modal-root" role="dialog" aria-modal="true" aria-label="Create new album">
-          <div className="album-modal">
-            <button type="button" className="album-modal-close" onClick={closeCreateAlbumModal} aria-label="Close album creation">
-              <span className="album-modal-close-glyph">×</span>
-            </button>
-
-            <form className="album-modal-content" onSubmit={(event) => void handleCreateAlbumSubmit(event)}>
-              <div className="album-modal-header">
-                <h2>New album</h2>
-                <p>Choose a name for the new folder in the Albums section.</p>
-              </div>
-
-              <div className="album-modal-field">
-                <label className="album-modal-label" htmlFor="new-album-name">
-                  Album name
-                </label>
-                <input
-                  ref={createAlbumInputRef}
-                  id="new-album-name"
-                  className="album-modal-input"
-                  type="text"
-                  value={newAlbumName}
-                  onChange={(event) => {
-                    setNewAlbumName(event.currentTarget.value);
-                    if (createAlbumError) {
-                      setCreateAlbumError("");
-                    }
-                  }}
-                  placeholder="Enter the album name"
-                  autoComplete="off"
-                  spellCheck={false}
-                  disabled={isCreatingAlbum}
-                />
-                {createAlbumError ? <span className="album-modal-error">{createAlbumError}</span> : null}
-              </div>
-
-              <div className="album-modal-actions">
-                <button type="submit" className="album-modal-confirm" disabled={isCreatingAlbum}>
-                  {isCreatingAlbum ? "Creating..." : "OK"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <AlbumModal
+          isCreatingAlbum={isCreatingAlbum}
+          newAlbumName={newAlbumName}
+          createAlbumError={createAlbumError}
+          inputRef={createAlbumInputRef}
+          onClose={closeCreateAlbumModal}
+          onSubmit={handleCreateAlbumSubmit}
+          onChangeName={(value) => {
+            setNewAlbumName(value);
+            if (createAlbumError) {
+              setCreateAlbumError("");
+            }
+          }}
+        />
       ) : null}
 
       {isSettingsOpen ? (
-        <div className="settings-modal-root" role="dialog" aria-modal="true" aria-label="Discasa settings">
-          <div className="settings-modal">
-            <aside className="settings-modal-sidebar">
-              <div className="settings-modal-profile">
-                <ProfileAvatar avatarUrl={profile.avatarUrl} className="settings-modal-avatar" />
-                <div className="settings-modal-profile-copy">
-                  <span className="settings-profile-primary">{profile.nickname}</span>
-                  <span className="settings-profile-secondary">{profile.server}</span>
-                </div>
-              </div>
-
-              <div className="settings-modal-nav-group">
-                <span className="settings-modal-nav-label">Settings</span>
-                <button type="button" className={`settings-modal-nav-item ${settingsSection === "discord" ? "active" : ""}`} onClick={() => setSettingsSection("discord")}>
-                  Discord
-                </button>
-                <button type="button" className={`settings-modal-nav-item ${settingsSection === "appearance" ? "active" : ""}`} onClick={() => setSettingsSection("appearance")}>
-                  Appearance
-                </button>
-                <button type="button" className={`settings-modal-nav-item ${settingsSection === "window" ? "active" : ""}`} onClick={() => setSettingsSection("window")}>
-                  Window
-                </button>
-              </div>
-            </aside>
-
-            <section className="settings-modal-content">
-              <button type="button" className="settings-modal-close" onClick={closeSettingsModal} aria-label="Close settings">
-                <span className="settings-modal-close-glyph">×</span>
-              </button>
-              {renderSettingsModalContent()}
-            </section>
-          </div>
-        </div>
+        <SettingsModal
+          profile={profile}
+          settingsSection={settingsSection}
+          sessionName={sessionName}
+          minimizeToTray={minimizeToTray}
+          closeToTray={closeToTray}
+          accentColor={accentColor}
+          accentInput={accentInput}
+          accentInputError={accentInputError}
+          onClose={() => setIsSettingsOpen(false)}
+          onSelectSection={setSettingsSection}
+          onOpenDiscordLogin={openDiscordLogin}
+          onChangeMinimizeToTray={setMinimizeToTray}
+          onChangeCloseToTray={setCloseToTray}
+          onAccentInputChange={handleAccentInputChange}
+          onAccentInputBlur={handleAccentInputBlur}
+        />
       ) : null}
 
-      {albumContextMenu ? (
-        <div
-          className="context-menu"
-          style={{ left: `${albumContextMenu.x}px`, top: `${albumContextMenu.y}px` }}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={() => void handleRenameAlbum(albumContextMenu.albumId, albumContextMenu.albumName)}
-          >
-            Rename
-          </button>
-          <div className="context-menu-separator" />
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={() => void handleMoveAlbum(albumContextMenu.albumId, "up")}
-            disabled={!canMoveAlbum(albumContextMenu.albumId, "up")}
-          >
-            Move up
-          </button>
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={() => void handleMoveAlbum(albumContextMenu.albumId, "down")}
-            disabled={!canMoveAlbum(albumContextMenu.albumId, "down")}
-          >
-            Move down
-          </button>
-          <div className="context-menu-separator" />
-          <button
-            type="button"
-            className="context-menu-item danger"
-            onClick={() => void handleDeleteAlbum(albumContextMenu.albumId, albumContextMenu.albumName)}
-          >
-            Delete album
-          </button>
-        </div>
-      ) : null}
+      <AlbumContextMenu
+        menu={albumContextMenu}
+        canMoveUp={albumContextMenu ? canMoveAlbum(albumContextMenu.albumId, "up") : false}
+        canMoveDown={albumContextMenu ? canMoveAlbum(albumContextMenu.albumId, "down") : false}
+        onRename={() =>
+          albumContextMenu
+            ? handleRenameAlbum(albumContextMenu.albumId, albumContextMenu.albumName)
+            : Promise.resolve()
+        }
+        onMoveUp={() => (albumContextMenu ? handleMoveAlbum(albumContextMenu.albumId, "up") : Promise.resolve())}
+        onMoveDown={() => (albumContextMenu ? handleMoveAlbum(albumContextMenu.albumId, "down") : Promise.resolve())}
+        onDelete={() =>
+          albumContextMenu
+            ? handleDeleteAlbum(albumContextMenu.albumId, albumContextMenu.albumName)
+            : Promise.resolve()
+        }
+        onPointerDown={(event) => event.stopPropagation()}
+      />
 
-      {(message || error) ? (
-        <div className="status-toast">
-          {message ? <span>{message}</span> : null}
-          {error ? <span className="status-error">{error}</span> : null}
-        </div>
-      ) : null}
+      <StatusToast message={message} error={error} />
     </div>
   );
 }

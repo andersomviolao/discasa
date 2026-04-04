@@ -155,9 +155,9 @@ export function SettingsModal({
 
   return (
     <div className="settings-modal-root" role="dialog" aria-modal="true" aria-label="Discasa settings">
-      <button type="button" className="settings-modal-backdrop" aria-label="Close settings" onClick={onClose} />
+      <div className="settings-modal-backdrop" aria-hidden="true" />
 
-      <div className="settings-modal">
+      <div className="settings-modal" onPointerDown={(event) => event.stopPropagation()}>
         <aside className="settings-modal-sidebar">
           <div className="settings-modal-profile">
             <ProfileAvatar avatarUrl={profile.avatarUrl} className="settings-modal-avatar" />

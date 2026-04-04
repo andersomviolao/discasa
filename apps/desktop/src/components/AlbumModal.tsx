@@ -41,7 +41,7 @@ export function AlbumModal({
             <input
               ref={inputRef}
               id="new-album-name"
-              className="form-text-input album-modal-input"
+              className="form-text-input"
               type="text"
               value={newAlbumName}
               onChange={(event) => onChangeName(event.currentTarget.value)}

@@ -1120,6 +1120,19 @@ img {
 .files-grid::-webkit-scrollbar-thumb,
 .settings-modal-content::-webkit-scrollbar-thumb {
   border-radius: 999px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  transition: background 0.16s ease;
+}
+
+.sidebar-panel:hover .sidebar-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.files-grid::-webkit-scrollbar-thumb,
+.settings-modal-content::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.05);
 }
 

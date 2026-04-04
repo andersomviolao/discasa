@@ -1,6 +1,7 @@
 import type { ChangeEvent } from "react";
-import { ProfileAvatar } from "./ProfileAvatar";
 import type { SettingsSection } from "../ui-types";
+import { BaseModal } from "./BaseModal";
+import { ProfileAvatar } from "./ProfileAvatar";
 
 type SettingsModalProps = {
   profile: {
@@ -154,41 +155,43 @@ export function SettingsModal({
   }
 
   return (
-    <div className="settings-modal-root" role="dialog" aria-modal="true" aria-label="Discasa settings">
-      <div className="settings-modal-backdrop" aria-hidden="true" />
-
-      <div className="settings-modal" onPointerDown={(event) => event.stopPropagation()}>
-        <aside className="settings-modal-sidebar">
-          <div className="settings-modal-profile">
-            <ProfileAvatar avatarUrl={profile.avatarUrl} className="settings-modal-avatar" />
-            <div className="settings-modal-profile-copy">
-              <span className="settings-profile-primary">{profile.nickname}</span>
-              <span className="settings-profile-secondary">{profile.server}</span>
-            </div>
+    <BaseModal
+      rootClassName="settings-modal-root"
+      backdropClassName="settings-modal-backdrop"
+      panelClassName="settings-modal"
+      ariaLabel="Discasa settings"
+      showCloseButton
+      closeButtonClassName="settings-modal-close"
+      closeButtonAriaLabel="Close settings"
+      onClose={onClose}
+    >
+      <aside className="settings-modal-sidebar">
+        <div className="settings-modal-profile">
+          <ProfileAvatar avatarUrl={profile.avatarUrl} className="settings-modal-avatar" />
+          <div className="settings-modal-profile-copy">
+            <span className="settings-profile-primary">{profile.nickname}</span>
+            <span className="settings-profile-secondary">{profile.server}</span>
           </div>
+        </div>
 
-          <div className="settings-modal-nav-group">
-            <span className="settings-modal-nav-label">Settings</span>
-            {settingsSections.map((section) => (
-              <button
-                key={section.id}
-                type="button"
-                className={`settings-modal-nav-item ${settingsSection === section.id ? "active" : ""}`}
-                onClick={() => onSelectSection(section.id)}
-              >
-                {section.label}
-              </button>
-            ))}
-          </div>
-        </aside>
+        <div className="settings-modal-nav-group">
+          <span className="settings-modal-nav-label">Settings</span>
+          {settingsSections.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              className={`settings-modal-nav-item ${settingsSection === section.id ? "active" : ""}`}
+              onClick={() => onSelectSection(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
+      </aside>
 
-        <section className="settings-modal-content scrollable-y subtle-scrollbar content-scrollbar-host">
-          <button type="button" className="icon-circle-button modal-close-button settings-modal-close" onClick={onClose} aria-label="Close settings">
-            <span className="modal-close-glyph">×</span>
-          </button>
-          {renderContent()}
-        </section>
-      </div>
-    </div>
+      <section className="settings-modal-content scrollable-y subtle-scrollbar content-scrollbar-host">
+        {renderContent()}
+      </section>
+    </BaseModal>
   );
 }

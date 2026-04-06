@@ -1,23 +1,6 @@
-import {
-  DISCASA_CATEGORY_NAME,
-  DISCASA_CHANNELS,
-  type GuildSummary,
-} from "@discasa/shared";
-import {
-  ChannelType,
-  Client,
-  GatewayIntentBits,
-  PermissionsBitField,
-  type GuildTextBasedChannel,
-} from "discord.js";
-import type { ActiveStorageContext, UploadedFileRecord } from "../lib/store";
+import { DISCASA_CATEGORY_NAME, DISCASA_CHANNELS, type GuildSummary } from "@discasa/shared";
+import { ChannelType, Client, GatewayIntentBits, PermissionsBitField } from "discord.js";
 import { env } from "../lib/env";
-
-type DiscordCurrentUser = {
-  id: string;
-  username: string;
-  avatar: string | null;
-};
 
 type DiscordUserGuild = {
   id: string;
@@ -41,116 +24,49 @@ async function getBotClient(): Promise<Client | null> {
   return botClient;
 }
 
-async function fetchDiscordJson<T>(path: string, accessToken: string): Promise<T> {
-  const response = await fetch(`https://discord.com/api/v10${path}`, {
+async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {
+  const response = await fetch("https://discord.com/api/v10/users/@me/guilds", {
     headers: {
       Authorization: `Bearer ${accessToken}`,
     },
   });
 
   if (!response.ok) {
-    throw new Error(`Discord request failed with status ${response.status}.`);
+    throw new Error("Failed to fetch the user guild list from Discord.");
   }
 
-  return (await response.json()) as T;
+  return (await response.json()) as DiscordUserGuild[];
 }
 
-function hasManagePermissions(rawPermissions: string): boolean {
-  const permissions = BigInt(rawPermissions || "0");
-  const requiredFlags =
-    PermissionsBitField.Flags.Administrator |
-    PermissionsBitField.Flags.ManageGuild |
-    PermissionsBitField.Flags.ManageChannels;
-
-  return (permissions & requiredFlags) !== 0n;
+function hasManageAccess(permissions: string): boolean {
+  const resolved = BigInt(permissions || "0");
+  const admin = BigInt(PermissionsBitField.Flags.Administrator.toString());
+  const manageGuild = BigInt(PermissionsBitField.Flags.ManageGuild.toString());
+  const manageChannels = BigInt(PermissionsBitField.Flags.ManageChannels.toString());
+  return (resolved & admin) !== 0n || (resolved & manageGuild) !== 0n || (resolved & manageChannels) !== 0n;
 }
 
-function mapGuildPermissions(rawPermissions: string): string[] {
-  const permissions = BigInt(rawPermissions || "0");
+function getPermissionLabels(permissions: string, owner: boolean): string[] {
   const labels: string[] = [];
+  const resolved = BigInt(permissions || "0");
 
-  if ((permissions & PermissionsBitField.Flags.Administrator) !== 0n) {
+  if (owner) {
+    labels.push("OWNER");
+  }
+
+  if ((resolved & BigInt(PermissionsBitField.Flags.Administrator.toString())) !== 0n) {
     labels.push("ADMINISTRATOR");
   }
 
-  if ((permissions & PermissionsBitField.Flags.ManageGuild) !== 0n) {
+  if ((resolved & BigInt(PermissionsBitField.Flags.ManageGuild.toString())) !== 0n) {
     labels.push("MANAGE_GUILD");
   }
 
-  if ((permissions & PermissionsBitField.Flags.ManageChannels) !== 0n) {
+  if ((resolved & BigInt(PermissionsBitField.Flags.ManageChannels.toString())) !== 0n) {
     labels.push("MANAGE_CHANNELS");
   }
 
   return labels;
-}
-
-function buildDiscordAvatarUrl(userId: string, avatarHash: string | null): string | null {
-  if (!avatarHash) {
-    return null;
-  }
-
-  const extension = avatarHash.startsWith("a_") ? "gif" : "png";
-  return `https://cdn.discordapp.com/avatars/${userId}/${avatarHash}.${extension}?size=128`;
-}
-
-async function fetchUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {
-  return fetchDiscordJson<DiscordUserGuild[]>("/users/@me/guilds", accessToken);
-}
-
-async function fetchGuildTextChannel(channelId: string): Promise<GuildTextBasedChannel> {
-  const client = await getBotClient();
-  if (!client) {
-    throw new Error("Discord bot is not configured.");
-  }
-
-  const channel = await client.channels.fetch(channelId);
-
-  if (!channel || !channel.isTextBased() || !("send" in channel)) {
-    throw new Error("Discasa drive channel is not available.");
-  }
-
-  return channel as GuildTextBasedChannel;
-}
-
-async function findOrCreateCategory(guildId: string) {
-  const client = await getBotClient();
-  if (!client) {
-    throw new Error("Discord bot is not configured.");
-  }
-
-  const guild = await client.guilds.fetch(guildId);
-  await guild.channels.fetch();
-
-  const botMember = await guild.members.fetchMe();
-  const hasManageChannels = botMember.permissions.has(PermissionsBitField.Flags.ManageChannels);
-
-  if (!hasManageChannels) {
-    throw new Error("The bot is missing Manage Channels permission in the selected guild.");
-  }
-
-  const existingCategory = guild.channels.cache.find(
-    (channel) => channel.type === ChannelType.GuildCategory && channel.name === DISCASA_CATEGORY_NAME,
-  );
-
-  const category =
-    existingCategory ??
-    (await guild.channels.create({
-      name: DISCASA_CATEGORY_NAME,
-      type: ChannelType.GuildCategory,
-      reason: "Initialize Discasa category",
-    }));
-
-  return { guild, category };
-}
-
-export async function getDiscordUser(accessToken: string): Promise<{ id: string; username: string; avatarUrl: string | null }> {
-  const user = await fetchDiscordJson<DiscordCurrentUser>("/users/@me", accessToken);
-
-  return {
-    id: user.id,
-    username: user.username,
-    avatarUrl: buildDiscordAvatarUrl(user.id, user.avatar),
-  };
 }
 
 export async function listEligibleGuilds(accessToken?: string): Promise<GuildSummary[]> {
@@ -175,138 +91,77 @@ export async function listEligibleGuilds(accessToken?: string): Promise<GuildSum
     return [];
   }
 
-  const client = await getBotClient();
-  if (!client) {
-    return [];
-  }
-
-  const botGuilds = await client.guilds.fetch();
-  const guilds = await fetchUserGuilds(accessToken);
+  const guilds = await fetchDiscordUserGuilds(accessToken);
 
   return guilds
-    .filter((guild) => guild.owner || hasManagePermissions(guild.permissions))
-    .filter((guild) => botGuilds.has(guild.id))
+    .filter((guild) => guild.owner || hasManageAccess(guild.permissions))
+    .sort((left, right) => left.name.localeCompare(right.name))
     .map((guild) => ({
       id: guild.id,
       name: guild.name,
       owner: guild.owner,
-      permissions: mapGuildPermissions(guild.permissions),
-    }))
-    .sort((left, right) => {
-      if (left.owner !== right.owner) {
-        return left.owner ? -1 : 1;
-      }
-
-      return left.name.localeCompare(right.name, undefined, { sensitivity: "base" });
-    });
+      permissions: getPermissionLabels(guild.permissions, guild.owner),
+    }));
 }
 
-export async function initializeDiscasaInGuild(guildId: string): Promise<ActiveStorageContext> {
+export async function initializeDiscasaInGuild(guildId: string) {
   if (env.mockMode) {
     return {
       guildId,
-      guildName: "Discasa Server",
-      categoryId: "mock_category",
       categoryName: DISCASA_CATEGORY_NAME,
-      driveChannelId: "mock_drive",
-      driveChannelName: DISCASA_CHANNELS[0],
-      indexChannelId: "mock_index",
-      indexChannelName: DISCASA_CHANNELS[1],
-      trashChannelId: "mock_trash",
-      trashChannelName: DISCASA_CHANNELS[2],
+      channels: DISCASA_CHANNELS,
     };
   }
 
-  const { guild, category } = await findOrCreateCategory(guildId);
+  const client = await getBotClient();
+  if (!client) {
+    throw new Error("Bot client is not configured.");
+  }
+
+  const guild = await client.guilds.fetch(guildId);
   await guild.channels.fetch();
 
-  const resolvedChannels = new Map<string, { id: string; name: string }>();
+  const botMember = await guild.members.fetchMe();
+  const hasManageChannels = botMember.permissions.has(PermissionsBitField.Flags.ManageChannels);
+
+  if (!hasManageChannels) {
+    throw new Error("The bot is missing Manage Channels permission in the selected guild.");
+  }
+
+  const existingCategory = guild.channels.cache.find(
+    (channel) => channel.type === ChannelType.GuildCategory && channel.name === DISCASA_CATEGORY_NAME,
+  );
+
+  const category =
+    existingCategory ??
+    (await guild.channels.create({
+      name: DISCASA_CATEGORY_NAME,
+      type: ChannelType.GuildCategory,
+      reason: "Initialize Discasa category",
+    }));
+
+  const createdChannels = [] as string[];
 
   for (const channelName of DISCASA_CHANNELS) {
-    const existingChannel = guild.channels.cache.find(
-      (channel) => channel.type === ChannelType.GuildText && channel.parentId === category.id && channel.name === channelName,
+    const existing = guild.channels.cache.find(
+      (channel) => channel.parentId === category.id && channel.name === channelName,
     );
 
-    const channel =
-      existingChannel ??
-      (await guild.channels.create({
+    if (!existing) {
+      await guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
         parent: category.id,
         reason: "Initialize Discasa channels",
-      }));
+      });
+    }
 
-    resolvedChannels.set(channelName, {
-      id: channel.id,
-      name: channel.name,
-    });
-  }
-
-  const driveChannel = resolvedChannels.get(DISCASA_CHANNELS[0]);
-  const indexChannel = resolvedChannels.get(DISCASA_CHANNELS[1]);
-  const trashChannel = resolvedChannels.get(DISCASA_CHANNELS[2]);
-
-  if (!driveChannel || !indexChannel || !trashChannel) {
-    throw new Error("Discasa channels could not be created in the selected guild.");
+    createdChannels.push(channelName);
   }
 
   return {
-    guildId: guild.id,
-    guildName: guild.name,
-    categoryId: category.id,
-    categoryName: category.name,
-    driveChannelId: driveChannel.id,
-    driveChannelName: driveChannel.name,
-    indexChannelId: indexChannel.id,
-    indexChannelName: indexChannel.name,
-    trashChannelId: trashChannel.id,
-    trashChannelName: trashChannel.name,
+    guildId,
+    categoryName: DISCASA_CATEGORY_NAME,
+    channels: createdChannels,
   };
-}
-
-export async function uploadFilesToDiscordDrive(
-  files: Express.Multer.File[],
-  context: ActiveStorageContext,
-): Promise<UploadedFileRecord[]> {
-  if (env.mockMode) {
-    return files.map((file) => ({
-      fileName: file.originalname,
-      fileSize: file.size,
-      mimeType: file.mimetype || "application/octet-stream",
-      guildId: context.guildId,
-      attachmentUrl: `mock://uploads/${encodeURIComponent(file.originalname)}`,
-    }));
-  }
-
-  const channel = await fetchGuildTextChannel(context.driveChannelId);
-  const uploaded: UploadedFileRecord[] = [];
-
-  for (const file of files) {
-    const sentMessage = await channel.send({
-      files: [
-        {
-          attachment: Buffer.from(file.buffer),
-          name: file.originalname,
-        },
-      ],
-    });
-
-    const attachment =
-      [...sentMessage.attachments.values()].find((entry) => entry.name === file.originalname) ??
-      [...sentMessage.attachments.values()][0];
-
-    if (!attachment) {
-      throw new Error(`Discord did not return an attachment URL for ${file.originalname}.`);
-    }
-
-    uploaded.push({
-      fileName: file.originalname,
-      fileSize: file.size,
-      mimeType: file.mimetype || "application/octet-stream",
-      guildId: context.guildId,
-      attachmentUrl: attachment.url,
-    });
-  }
-
-  return uploaded;
 }

@@ -1,4 +1,5 @@
 import type { ChangeEvent } from "react";
+import type { GuildSummary } from "@discasa/shared";
 import type { SettingsSection } from "../ui-types";
 import { BaseModal } from "./BaseModal";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -11,6 +12,12 @@ type SettingsModalProps = {
   };
   settingsSection: SettingsSection;
   sessionName: string | null;
+  guilds: GuildSummary[];
+  selectedGuildId: string;
+  activeGuildName: string | null;
+  isLoadingGuilds: boolean;
+  isApplyingGuild: boolean;
+  discordSettingsError: string;
   minimizeToTray: boolean;
   closeToTray: boolean;
   accentColor: string;
@@ -19,6 +26,9 @@ type SettingsModalProps = {
   onClose: () => void;
   onSelectSection: (section: SettingsSection) => void;
   onOpenDiscordLogin: () => void;
+  onOpenDiscordBotInstall: () => void;
+  onSelectGuild: (guildId: string) => void;
+  onApplyGuild: () => void;
   onChangeMinimizeToTray: (checked: boolean) => void;
   onChangeCloseToTray: (checked: boolean) => void;
   onAccentInputChange: (value: string) => void;
@@ -35,6 +45,12 @@ export function SettingsModal({
   profile,
   settingsSection,
   sessionName,
+  guilds,
+  selectedGuildId,
+  activeGuildName,
+  isLoadingGuilds,
+  isApplyingGuild,
+  discordSettingsError,
   minimizeToTray,
   closeToTray,
   accentColor,
@@ -43,32 +59,102 @@ export function SettingsModal({
   onClose,
   onSelectSection,
   onOpenDiscordLogin,
+  onOpenDiscordBotInstall,
+  onSelectGuild,
+  onApplyGuild,
   onChangeMinimizeToTray,
   onChangeCloseToTray,
   onAccentInputChange,
   onAccentInputBlur,
 }: SettingsModalProps) {
-  function renderContent() {
-    if (settingsSection === "discord") {
-      return (
-        <>
-          <div className="settings-modal-header">
-            <div>
-              <h2>Discord</h2>
-              <p>Connect your account to sync Discasa identity data in the future.</p>
-            </div>
+  function renderGuildOptions() {
+    if (isLoadingGuilds) {
+      return <option value="">Loading servers...</option>;
+    }
+
+    if (!guilds.length) {
+      return <option value="">No eligible servers found</option>;
+    }
+
+    return [
+      <option key="placeholder" value="">
+        Select a server
+      </option>,
+      ...guilds.map((guild) => (
+        <option key={guild.id} value={guild.id}>
+          {guild.name}
+        </option>
+      )),
+    ];
+  }
+
+  function renderDiscordContent() {
+    return (
+      <>
+        <div className="settings-modal-header">
+          <div>
+            <h2>Discord</h2>
+            <p>Connect your Discord account, choose a server, install the bot there, then apply Discasa to that server.</p>
+          </div>
+        </div>
+
+        <div className="settings-card panel-surface-secondary">
+          <div className={`settings-status ${sessionName ? "connected" : "disconnected"}`}>
+            {sessionName ? `Connected as ${sessionName}` : "Not connected"}
           </div>
 
-          <div className="settings-card panel-surface-secondary">
-            <div className={`settings-status ${sessionName ? "connected" : "disconnected"}`}>
-              {sessionName ? "Connected" : "Not connected"}
-            </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
             <button className="pill-button accent-button primary-button" onClick={onOpenDiscordLogin}>
-              Login with Discord
+              {sessionName ? "Reconnect Discord" : "Login with Discord"}
+            </button>
+
+            <button
+              className="pill-button secondary-button primary-button"
+              onClick={onOpenDiscordBotInstall}
+              disabled={!sessionName || !selectedGuildId}
+            >
+              Add bot to selected server
             </button>
           </div>
-        </>
-      );
+
+          <div className="settings-field-stack">
+            <label className="settings-input-label" htmlFor="discord-server-select">
+              Target server
+            </label>
+            <select
+              id="discord-server-select"
+              className="form-text-input"
+              value={selectedGuildId}
+              disabled={!sessionName || isLoadingGuilds || !guilds.length}
+              onChange={(event: ChangeEvent<HTMLSelectElement>) => onSelectGuild(event.currentTarget.value)}
+            >
+              {renderGuildOptions()}
+            </select>
+            <span className={`settings-input-help ${discordSettingsError ? "error" : ""}`}>
+              {discordSettingsError ||
+                (activeGuildName
+                  ? `Current applied server: ${activeGuildName}`
+                  : "Select the Discord server that Discasa should use.")}
+            </span>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+            <button
+              className="pill-button secondary-button primary-button"
+              onClick={onApplyGuild}
+              disabled={!sessionName || !selectedGuildId || isApplyingGuild}
+            >
+              {isApplyingGuild ? "Applying..." : "Apply selected server"}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  function renderContent() {
+    if (settingsSection === "discord") {
+      return renderDiscordContent();
     }
 
     if (settingsSection === "appearance") {

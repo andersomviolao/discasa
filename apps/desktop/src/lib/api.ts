@@ -136,3 +136,14 @@ export async function deleteLibraryItem(itemId: string): Promise<{ deleted: true
 export function openDiscordLogin(): void {
   window.open(`${API_BASE}/auth/discord/login`, "_self");
 }
+
+export function openDiscordBotInstall(guildId: string): void {
+  const params = new URLSearchParams();
+
+  if (guildId) {
+    params.set("guildId", guildId);
+  }
+
+  const suffix = params.toString();
+  window.open(`${API_BASE}/auth/discord/install${suffix ? `?${suffix}` : ""}`, "_self");
+}

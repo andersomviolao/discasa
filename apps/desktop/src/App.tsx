@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
-import type { AlbumRecord, LibraryItem } from "@discasa/shared";
+import type { AlbumRecord, GuildSummary, LibraryItem } from "@discasa/shared";
 import {
   createAlbum,
   deleteAlbum,
   deleteLibraryItem,
   getAlbums,
+  getGuilds,
   getLibraryItems,
   getSession,
+  initializeDiscasa,
   moveToTrash,
+  openDiscordBotInstall,
   openDiscordLogin,
   renameAlbum,
   reorderAlbums,
@@ -34,6 +37,9 @@ const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
 const MINIMIZE_TO_TRAY_KEY = "discasa.window.minimizeToTray";
 const CLOSE_TO_TRAY_KEY = "discasa.window.closeToTray";
 const ACCENT_COLOR_KEY = "discasa.ui.accentColor";
+const SELECTED_GUILD_KEY = "discasa.discord.selectedGuildId";
+const ACTIVE_GUILD_ID_KEY = "discasa.discord.activeGuildId";
+const ACTIVE_GUILD_NAME_KEY = "discasa.discord.activeGuildName";
 const DEFAULT_ACCENT_HEX = "#E9881D";
 
 function isTauriRuntime(): boolean {
@@ -101,6 +107,16 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("discord");
   const [sessionName, setSessionName] = useState<string | null>(null);
   const [sessionAvatarUrl, setSessionAvatarUrl] = useState<string | null>(null);
+  const [guilds, setGuilds] = useState<GuildSummary[]>([]);
+  const [selectedGuildId, setSelectedGuildId] = useState<string>(() => readStoredString(SELECTED_GUILD_KEY, ""));
+  const [activeGuildId, setActiveGuildId] = useState<string>(() => readStoredString(ACTIVE_GUILD_ID_KEY, ""));
+  const [activeGuildName, setActiveGuildName] = useState<string | null>(() => {
+    const value = readStoredString(ACTIVE_GUILD_NAME_KEY, "");
+    return value || null;
+  });
+  const [isLoadingGuilds, setIsLoadingGuilds] = useState(false);
+  const [isApplyingGuild, setIsApplyingGuild] = useState(false);
+  const [discordSettingsError, setDiscordSettingsError] = useState("");
   const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [selectedView, setSelectedView] = useState<SidebarView>({ kind: "library", id: "all-files" });
@@ -155,6 +171,33 @@ export function App() {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(CLOSE_TO_TRAY_KEY, closeToTray ? "1" : "0");
   }, [closeToTray]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (selectedGuildId) {
+      window.localStorage.setItem(SELECTED_GUILD_KEY, selectedGuildId);
+      return;
+    }
+
+    window.localStorage.removeItem(SELECTED_GUILD_KEY);
+  }, [selectedGuildId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (activeGuildId) {
+      window.localStorage.setItem(ACTIVE_GUILD_ID_KEY, activeGuildId);
+    } else {
+      window.localStorage.removeItem(ACTIVE_GUILD_ID_KEY);
+    }
+
+    if (activeGuildName) {
+      window.localStorage.setItem(ACTIVE_GUILD_NAME_KEY, activeGuildName);
+    } else {
+      window.localStorage.removeItem(ACTIVE_GUILD_NAME_KEY);
+    }
+  }, [activeGuildId, activeGuildName]);
 
   useEffect(() => {
     const normalized = normalizeHexColor(accentColor) ?? DEFAULT_ACCENT_HEX;
@@ -303,6 +346,43 @@ export function App() {
     };
   }, []);
 
+  function syncGuildSelection(nextGuilds: GuildSummary[]): void {
+    setSelectedGuildId((current) => {
+      if (current && nextGuilds.some((guild) => guild.id === current)) {
+        return current;
+      }
+
+      if (activeGuildId && nextGuilds.some((guild) => guild.id === activeGuildId)) {
+        return activeGuildId;
+      }
+
+      return nextGuilds[0]?.id ?? "";
+    });
+
+    if (activeGuildId) {
+      const matchedGuild = nextGuilds.find((guild) => guild.id === activeGuildId);
+      if (matchedGuild) {
+        setActiveGuildName(matchedGuild.name);
+      }
+    }
+  }
+
+  async function loadEligibleGuilds(): Promise<void> {
+    setIsLoadingGuilds(true);
+    setDiscordSettingsError("");
+
+    try {
+      const nextGuilds = await getGuilds();
+      setGuilds(nextGuilds);
+      syncGuildSelection(nextGuilds);
+    } catch (caughtError) {
+      setGuilds([]);
+      setDiscordSettingsError(caughtError instanceof Error ? caughtError.message : "Could not load the Discord server list.");
+    } finally {
+      setIsLoadingGuilds(false);
+    }
+  }
+
   async function bootstrap(): Promise<void> {
     setIsBusy(true);
     setError("");
@@ -314,6 +394,12 @@ export function App() {
       setSessionAvatarUrl(session.user?.avatarUrl ?? null);
       setAlbums(nextAlbums);
       setItems(nextItems);
+
+      if (session.authenticated) {
+        await loadEligibleGuilds();
+      } else {
+        setGuilds([]);
+      }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to load Discasa preview.");
     } finally {
@@ -324,10 +410,10 @@ export function App() {
   const profile = useMemo(
     () => ({
       nickname: sessionName ?? DEFAULT_PROFILE.nickname,
-      server: DEFAULT_PROFILE.server,
+      server: activeGuildName ?? DEFAULT_PROFILE.server,
       avatarUrl: sessionAvatarUrl,
     }),
-    [sessionAvatarUrl, sessionName],
+    [activeGuildName, sessionAvatarUrl, sessionName],
   );
 
   const visibleItems = useMemo(() => getVisibleItems(items, selectedView), [items, selectedView]);
@@ -362,6 +448,10 @@ export function App() {
     setAlbumContextMenu(null);
     setSettingsSection("discord");
     setIsSettingsOpen(true);
+
+    if (sessionName && !guilds.length && !isLoadingGuilds) {
+      void loadEligibleGuilds();
+    }
   }
 
   function openCreateAlbumModal(): void {
@@ -517,7 +607,7 @@ export function App() {
     }
 
     const blob = await response.blob();
-    const name = filePath.split(/[\\/]/).pop() ?? "file";
+    const name = filePath.split(/[\/]/).pop() ?? "file";
     return new File([blob], name, { type: blob.type || "application/octet-stream" });
   }
 
@@ -550,6 +640,39 @@ export function App() {
     } finally {
       setIsBusy(false);
     }
+  }
+
+  async function handleApplySelectedGuild(): Promise<void> {
+    if (!selectedGuildId) {
+      setDiscordSettingsError("Select a server first.");
+      return;
+    }
+
+    setIsApplyingGuild(true);
+    setDiscordSettingsError("");
+
+    try {
+      const result = await initializeDiscasa(selectedGuildId);
+      const guildName = guilds.find((guild) => guild.id === selectedGuildId)?.name ?? "Selected server";
+      setActiveGuildId(result.guildId);
+      setActiveGuildName(guildName);
+      setMessage(`Discasa applied to ${guildName}.`);
+      setError("");
+    } catch (caughtError) {
+      setDiscordSettingsError(caughtError instanceof Error ? caughtError.message : "Could not apply the selected server.");
+    } finally {
+      setIsApplyingGuild(false);
+    }
+  }
+
+  function handleOpenDiscordBotInstall(): void {
+    if (!selectedGuildId) {
+      setDiscordSettingsError("Select a server first.");
+      return;
+    }
+
+    setDiscordSettingsError("");
+    openDiscordBotInstall(selectedGuildId);
   }
 
   async function handleToggleFavorite(itemId: string): Promise<void> {
@@ -817,6 +940,12 @@ export function App() {
           profile={profile}
           settingsSection={settingsSection}
           sessionName={sessionName}
+          guilds={guilds}
+          selectedGuildId={selectedGuildId}
+          activeGuildName={activeGuildName}
+          isLoadingGuilds={isLoadingGuilds}
+          isApplyingGuild={isApplyingGuild}
+          discordSettingsError={discordSettingsError}
           minimizeToTray={minimizeToTray}
           closeToTray={closeToTray}
           accentColor={accentColor}
@@ -825,6 +954,16 @@ export function App() {
           onClose={() => setIsSettingsOpen(false)}
           onSelectSection={setSettingsSection}
           onOpenDiscordLogin={openDiscordLogin}
+          onOpenDiscordBotInstall={handleOpenDiscordBotInstall}
+          onSelectGuild={(guildId) => {
+            setSelectedGuildId(guildId);
+            if (discordSettingsError) {
+              setDiscordSettingsError("");
+            }
+          }}
+          onApplyGuild={() => {
+            void handleApplySelectedGuild();
+          }}
           onChangeMinimizeToTray={setMinimizeToTray}
           onChangeCloseToTray={setCloseToTray}
           onAccentInputChange={handleAccentInputChange}

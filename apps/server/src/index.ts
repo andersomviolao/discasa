@@ -8,7 +8,9 @@ import { env } from "./lib/env";
 declare module "express-session" {
   interface SessionData {
     authenticated?: boolean;
-    accessToken?: string;
+    discordOauthState?: string;
+    discordAccessToken?: string;
+    discordRefreshToken?: string;
     user?: {
       id: string;
       username: string;

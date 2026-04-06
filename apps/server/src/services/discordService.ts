@@ -1,5 +1,18 @@
-import { DISCASA_CATEGORY_NAME, DISCASA_CHANNELS, type GuildSummary } from "@discasa/shared";
-import { ChannelType, Client, GatewayIntentBits, PermissionsBitField } from "discord.js";
+import {
+  DISCASA_CATEGORY_NAME,
+  DISCASA_CHANNELS,
+  type GuildSummary,
+} from "@discasa/shared";
+import {
+  ChannelType,
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField,
+  type GuildBasedChannel,
+  type GuildTextBasedChannel,
+  type Message,
+} from "discord.js";
+import type { ActiveStorageContext, PersistedIndexState, UploadedFileRecord } from "../lib/store";
 import { env } from "../lib/env";
 
 type DiscordUserGuild = {
@@ -8,6 +21,16 @@ type DiscordUserGuild = {
   owner: boolean;
   permissions: string;
 };
+
+type PersistedIndexEnvelope = {
+  version: 1;
+  savedAt: string;
+  albums: PersistedIndexState["albums"];
+  items: PersistedIndexState["items"];
+};
+
+const INDEX_MESSAGE_TAG = "[discasa-index]";
+const INDEX_FILE_NAME = "discasa-index.json";
 
 let botClient: Client | null = null;
 
@@ -69,6 +92,72 @@ function getPermissionLabels(permissions: string, owner: boolean): string[] {
   return labels;
 }
 
+function isGuildTextChannel(channel: GuildBasedChannel | null): channel is GuildTextBasedChannel {
+  return Boolean(channel && channel.isTextBased() && "send" in channel && "messages" in channel);
+}
+
+async function fetchGuildTextChannel(channelId: string, errorMessage: string): Promise<GuildTextBasedChannel> {
+  const client = await getBotClient();
+  if (!client) {
+    throw new Error("Bot client is not configured.");
+  }
+
+  const channel = await client.channels.fetch(channelId);
+  if (!isGuildTextChannel(channel)) {
+    throw new Error(errorMessage);
+  }
+
+  return channel;
+}
+
+function buildIndexEnvelope(state: PersistedIndexState): PersistedIndexEnvelope {
+  return {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    albums: state.albums,
+    items: state.items,
+  };
+}
+
+function isIndexSnapshotMessage(message: Message<true>, botUserId: string): boolean {
+  if (message.author.id !== botUserId) {
+    return false;
+  }
+
+  if (!message.content.startsWith(INDEX_MESSAGE_TAG)) {
+    return false;
+  }
+
+  return [...message.attachments.values()].some((attachment) => attachment.name === INDEX_FILE_NAME);
+}
+
+async function readIndexEnvelopeFromMessage(message: Message<true>): Promise<PersistedIndexEnvelope | null> {
+  const attachment =
+    [...message.attachments.values()].find((entry) => entry.name === INDEX_FILE_NAME) ??
+    [...message.attachments.values()][0];
+
+  if (!attachment) {
+    return null;
+  }
+
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    return null;
+  }
+
+  const parsed = (await response.json()) as Partial<PersistedIndexEnvelope>;
+  if (!Array.isArray(parsed.albums) || !Array.isArray(parsed.items)) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : new Date().toISOString(),
+    albums: parsed.albums,
+    items: parsed.items,
+  };
+}
+
 export async function listEligibleGuilds(accessToken?: string): Promise<GuildSummary[]> {
   if (env.mockMode) {
     return [
@@ -104,12 +193,19 @@ export async function listEligibleGuilds(accessToken?: string): Promise<GuildSum
     }));
 }
 
-export async function initializeDiscasaInGuild(guildId: string) {
+export async function initializeDiscasaInGuild(guildId: string): Promise<ActiveStorageContext> {
   if (env.mockMode) {
     return {
       guildId,
+      guildName: "Discasa Server",
+      categoryId: "mock_category",
       categoryName: DISCASA_CATEGORY_NAME,
-      channels: DISCASA_CHANNELS,
+      driveChannelId: "mock_drive",
+      driveChannelName: DISCASA_CHANNELS[0],
+      indexChannelId: "mock_index",
+      indexChannelName: DISCASA_CHANNELS[1],
+      trashChannelId: "mock_trash",
+      trashChannelName: DISCASA_CHANNELS[2],
     };
   }
 
@@ -140,28 +236,156 @@ export async function initializeDiscasaInGuild(guildId: string) {
       reason: "Initialize Discasa category",
     }));
 
-  const createdChannels = [] as string[];
+  const resolvedChannels = new Map<string, { id: string; name: string }>();
 
   for (const channelName of DISCASA_CHANNELS) {
-    const existing = guild.channels.cache.find(
-      (channel) => channel.parentId === category.id && channel.name === channelName,
+    const existingChannel = guild.channels.cache.find(
+      (channel) => channel.type === ChannelType.GuildText && channel.parentId === category.id && channel.name === channelName,
     );
 
-    if (!existing) {
-      await guild.channels.create({
+    const channel =
+      existingChannel ??
+      (await guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
         parent: category.id,
         reason: "Initialize Discasa channels",
-      });
-    }
+      }));
 
-    createdChannels.push(channelName);
+    resolvedChannels.set(channelName, {
+      id: channel.id,
+      name: channel.name,
+    });
+  }
+
+  const driveChannel = resolvedChannels.get(DISCASA_CHANNELS[0]);
+  const indexChannel = resolvedChannels.get(DISCASA_CHANNELS[1]);
+  const trashChannel = resolvedChannels.get(DISCASA_CHANNELS[2]);
+
+  if (!driveChannel || !indexChannel || !trashChannel) {
+    throw new Error("Discasa channels could not be created in the selected guild.");
   }
 
   return {
-    guildId,
-    categoryName: DISCASA_CATEGORY_NAME,
-    channels: createdChannels,
+    guildId: guild.id,
+    guildName: guild.name,
+    categoryId: category.id,
+    categoryName: category.name,
+    driveChannelId: driveChannel.id,
+    driveChannelName: driveChannel.name,
+    indexChannelId: indexChannel.id,
+    indexChannelName: indexChannel.name,
+    trashChannelId: trashChannel.id,
+    trashChannelName: trashChannel.name,
   };
+}
+
+export async function uploadFilesToDiscordDrive(
+  files: Express.Multer.File[],
+  context: ActiveStorageContext,
+): Promise<UploadedFileRecord[]> {
+  if (env.mockMode) {
+    return files.map((file) => ({
+      fileName: file.originalname,
+      fileSize: file.size,
+      mimeType: file.mimetype || "application/octet-stream",
+      guildId: context.guildId,
+      attachmentUrl: `mock://uploads/${encodeURIComponent(file.originalname)}`,
+    }));
+  }
+
+  const channel = await fetchGuildTextChannel(context.driveChannelId, "Discasa drive channel is not available.");
+  const uploaded: UploadedFileRecord[] = [];
+
+  for (const file of files) {
+    const sentMessage = await channel.send({
+      files: [
+        {
+          attachment: Buffer.from(file.buffer),
+          name: file.originalname,
+        },
+      ],
+    });
+
+    const attachment =
+      [...sentMessage.attachments.values()].find((entry) => entry.name === file.originalname) ??
+      [...sentMessage.attachments.values()][0];
+
+    if (!attachment) {
+      throw new Error(`Discord did not return an attachment URL for ${file.originalname}.`);
+    }
+
+    uploaded.push({
+      fileName: file.originalname,
+      fileSize: file.size,
+      mimeType: file.mimetype || "application/octet-stream",
+      guildId: context.guildId,
+      attachmentUrl: attachment.url,
+    });
+  }
+
+  return uploaded;
+}
+
+export async function loadPersistedIndexState(
+  context: ActiveStorageContext,
+): Promise<{ state: PersistedIndexState; messageId: string } | null> {
+  if (env.mockMode) {
+    return null;
+  }
+
+  const channel = await fetchGuildTextChannel(context.indexChannelId, "Discasa index channel is not available.");
+  const botUserId = channel.client.user?.id;
+
+  if (!botUserId) {
+    return null;
+  }
+
+  const messages = await channel.messages.fetch({ limit: 50 });
+  const orderedMessages = [...messages.values()].sort((left, right) => right.createdTimestamp - left.createdTimestamp);
+
+  for (const message of orderedMessages) {
+    if (!isIndexSnapshotMessage(message, botUserId)) {
+      continue;
+    }
+
+    const envelope = await readIndexEnvelopeFromMessage(message);
+    if (!envelope) {
+      continue;
+    }
+
+    return {
+      state: {
+        albums: envelope.albums,
+        items: envelope.items,
+      },
+      messageId: message.id,
+    };
+  }
+
+  return null;
+}
+
+export async function persistIndexState(
+  context: ActiveStorageContext,
+  state: PersistedIndexState,
+): Promise<string> {
+  if (env.mockMode) {
+    return "mock_index_message";
+  }
+
+  const channel = await fetchGuildTextChannel(context.indexChannelId, "Discasa index channel is not available.");
+  const payload = JSON.stringify(buildIndexEnvelope(state), null, 2);
+
+  const sentMessage = await channel.send({
+    content: `${INDEX_MESSAGE_TAG} ${new Date().toISOString()}`,
+    files: [
+      {
+        attachment: Buffer.from(payload, "utf8"),
+        name: INDEX_FILE_NAME,
+      },
+    ],
+  });
+
+  return sentMessage.id;
 }

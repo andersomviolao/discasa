@@ -1,3 +1,4 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AlbumRecord,
   AppSession,
@@ -10,6 +11,19 @@ import type {
 } from "@discasa/shared";
 
 const API_BASE = "http://localhost:3001";
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+async function openExternalUrl(url: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await openUrl(url);
+    return;
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers ?? undefined);
@@ -145,5 +159,7 @@ export function openDiscordBotInstall(guildId: string): void {
   }
 
   const suffix = params.toString();
-  window.open(`${API_BASE}/auth/discord/install${suffix ? `?${suffix}` : ""}`, "_self");
+  const url = `${API_BASE}/auth/discord/install${suffix ? `?${suffix}` : ""}`;
+
+  void openExternalUrl(url);
 }

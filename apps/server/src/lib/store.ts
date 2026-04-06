@@ -4,9 +4,14 @@ import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
 import type { AlbumRecord, LibraryItem } from "@discasa/shared";
 
-type PersistedAlbum = {
+export type PersistedAlbum = {
   id: string;
   name: string;
+};
+
+export type PersistedIndexState = {
+  albums: PersistedAlbum[];
+  items: LibraryItem[];
 };
 
 export type ActiveStorageContext = {
@@ -30,10 +35,9 @@ export type UploadedFileRecord = {
   attachmentUrl: string;
 };
 
-type MockDatabase = {
-  albums: PersistedAlbum[];
-  items: LibraryItem[];
+type LocalDatabase = PersistedIndexState & {
   activeStorage: ActiveStorageContext | null;
+  indexMessageId: string | null;
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -45,12 +49,49 @@ function ensureDataDir(): void {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-function createDefaultDatabase(): MockDatabase {
+function createDefaultDatabase(): LocalDatabase {
   return {
     albums: [],
     items: [],
     activeStorage: null,
+    indexMessageId: null,
   };
+}
+
+function isValidAlbum(raw: unknown): raw is PersistedAlbum {
+  return Boolean(raw && typeof raw === "object" && typeof (raw as PersistedAlbum).id === "string" && typeof (raw as PersistedAlbum).name === "string");
+}
+
+function normalizeAlbums(raw: unknown): PersistedAlbum[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.filter(isValidAlbum).map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+  }));
+}
+
+function normalizeItems(raw: unknown): LibraryItem[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .filter((entry): entry is LibraryItem => Boolean(entry && typeof entry === "object" && typeof (entry as LibraryItem).id === "string" && typeof (entry as LibraryItem).name === "string"))
+    .map((entry) => ({
+      ...entry,
+      albumIds: Array.isArray(entry.albumIds) ? entry.albumIds.filter((albumId): albumId is string => typeof albumId === "string") : [],
+      attachmentUrl: typeof entry.attachmentUrl === "string" ? entry.attachmentUrl : "",
+      guildId: typeof entry.guildId === "string" ? entry.guildId : "",
+      mimeType: typeof entry.mimeType === "string" ? entry.mimeType : "application/octet-stream",
+      status: typeof entry.status === "string" ? entry.status : "stored",
+      uploadedAt: typeof entry.uploadedAt === "string" ? entry.uploadedAt : new Date().toISOString(),
+      size: typeof entry.size === "number" ? entry.size : 0,
+      isFavorite: Boolean(entry.isFavorite),
+      isTrashed: Boolean(entry.isTrashed),
+    }));
 }
 
 function isValidActiveStorage(raw: unknown): raw is ActiveStorageContext {
@@ -74,29 +115,16 @@ function isValidActiveStorage(raw: unknown): raw is ActiveStorageContext {
   ].every((key) => typeof entry[key] === "string" && String(entry[key]).length > 0);
 }
 
-function normalizeDatabase(raw: Partial<MockDatabase> | null | undefined): MockDatabase {
-  const fallback = createDefaultDatabase();
-
-  const albums = Array.isArray(raw?.albums)
-    ? raw.albums
-        .filter((entry): entry is PersistedAlbum => Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"))
-        .map((entry) => ({ id: entry.id, name: entry.name }))
-    : fallback.albums;
-
-  const items = Array.isArray(raw?.items)
-    ? raw.items.filter((entry): entry is LibraryItem => Boolean(entry && typeof entry.id === "string" && typeof entry.name === "string"))
-    : fallback.items;
-
-  const activeStorage = isValidActiveStorage(raw?.activeStorage) ? raw.activeStorage : fallback.activeStorage;
-
+function normalizeDatabase(raw: Partial<LocalDatabase> | null | undefined): LocalDatabase {
   return {
-    albums,
-    items,
-    activeStorage,
+    albums: normalizeAlbums(raw?.albums),
+    items: normalizeItems(raw?.items),
+    activeStorage: isValidActiveStorage(raw?.activeStorage) ? raw.activeStorage : null,
+    indexMessageId: typeof raw?.indexMessageId === "string" && raw.indexMessageId.length > 0 ? raw.indexMessageId : null,
   };
 }
 
-function loadDatabase(): MockDatabase {
+function loadDatabase(): LocalDatabase {
   ensureDataDir();
 
   if (!fs.existsSync(dataFile)) {
@@ -107,7 +135,7 @@ function loadDatabase(): MockDatabase {
 
   try {
     const raw = fs.readFileSync(dataFile, "utf8");
-    const parsed = JSON.parse(raw) as Partial<MockDatabase>;
+    const parsed = JSON.parse(raw) as Partial<LocalDatabase>;
     const normalized = normalizeDatabase(parsed);
     fs.writeFileSync(dataFile, JSON.stringify(normalized, null, 2), "utf8");
     return normalized;
@@ -139,6 +167,40 @@ export function getActiveStorageContext(): ActiveStorageContext | null {
 
 export function setActiveStorageContext(nextContext: ActiveStorageContext | null): void {
   database.activeStorage = nextContext;
+  saveDatabase();
+}
+
+export function getIndexMessageId(): string | null {
+  return database.indexMessageId;
+}
+
+export function setIndexMessageId(nextMessageId: string | null): void {
+  database.indexMessageId = nextMessageId;
+  saveDatabase();
+}
+
+export function getPersistedIndexState(): PersistedIndexState {
+  return {
+    albums: database.albums.map((album) => ({ ...album })),
+    items: database.items.map((item) => ({
+      ...item,
+      albumIds: [...item.albumIds],
+    })),
+  };
+}
+
+export function applyPersistedIndexState(
+  nextState: PersistedIndexState,
+  nextContext: ActiveStorageContext | null,
+  nextIndexMessageId: string | null = database.indexMessageId,
+): void {
+  const normalizedAlbums = normalizeAlbums(nextState.albums);
+  const normalizedItems = normalizeItems(nextState.items);
+
+  database.albums.splice(0, database.albums.length, ...normalizedAlbums);
+  database.items.splice(0, database.items.length, ...normalizedItems);
+  database.activeStorage = nextContext;
+  database.indexMessageId = nextIndexMessageId;
   saveDatabase();
 }
 

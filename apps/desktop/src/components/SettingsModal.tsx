@@ -94,7 +94,7 @@ export function SettingsModal({
         <div className="settings-modal-header">
           <div>
             <h2>Discord</h2>
-            <p>Connect your Discord account, choose a server, install the bot there, then apply Discasa to that server.</p>
+            <p>Connect your Discord account, choose a server, add the bot in the browser, then return here and apply that server.</p>
           </div>
         </div>
 
@@ -116,6 +116,10 @@ export function SettingsModal({
               Add bot to selected server
             </button>
           </div>
+
+          <span className="settings-input-help">
+            The bot installation opens in your default browser so the Discasa window stays intact.
+          </span>
 
           <div className="settings-field-stack">
             <label className="settings-input-label" htmlFor="discord-server-select">

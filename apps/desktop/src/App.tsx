@@ -40,10 +40,37 @@ const ACCENT_COLOR_KEY = "discasa.ui.accentColor";
 const SELECTED_GUILD_KEY = "discasa.discord.selectedGuildId";
 const ACTIVE_GUILD_ID_KEY = "discasa.discord.activeGuildId";
 const ACTIVE_GUILD_NAME_KEY = "discasa.discord.activeGuildName";
+const THUMBNAIL_ZOOM_KEY = "discasa.library.thumbnailZoomPercent";
 const DEFAULT_ACCENT_HEX = "#E9881D";
+const THUMBNAIL_BASE_SIZE = 400;
+const THUMBNAIL_ZOOM_LEVELS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] as const;
+const DEFAULT_THUMBNAIL_ZOOM_PERCENT = 50;
 
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getClosestThumbnailZoomIndex(value: number): number {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  THUMBNAIL_ZOOM_LEVELS.forEach((level, index) => {
+    const distance = Math.abs(level - value);
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  });
+
+  return closestIndex;
+}
+
+function getThumbnailSizeFromZoomPercent(value: number): number {
+  return Math.round((THUMBNAIL_BASE_SIZE * value) / 100);
 }
 
 function readStoredBoolean(key: string, fallback: boolean): boolean {
@@ -57,6 +84,15 @@ function readStoredString(key: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   const raw = window.localStorage.getItem(key);
   return raw && raw.trim().length > 0 ? raw : fallback;
+}
+
+function readStoredNumber(key: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  const raw = window.localStorage.getItem(key);
+  if (raw === null) return fallback;
+
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function normalizeHexColor(value: string): string | null {
@@ -135,6 +171,10 @@ export function App() {
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingAlbum, setIsDeletingAlbum] = useState(false);
   const [deleteAlbumError, setDeleteAlbumError] = useState("");
+  const [thumbnailZoomIndex, setThumbnailZoomIndex] = useState<number>(() => {
+    const storedPercent = readStoredNumber(THUMBNAIL_ZOOM_KEY, DEFAULT_THUMBNAIL_ZOOM_PERCENT);
+    return getClosestThumbnailZoomIndex(storedPercent);
+  });
 
   const dragDepthRef = useRef(0);
   const closeToTrayRef = useRef(closeToTray);
@@ -142,6 +182,9 @@ export function App() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const albumsRef = useRef<AlbumRecord[]>([]);
   const selectedViewRef = useRef<SidebarView>(selectedView);
+
+  const thumbnailZoomPercent = THUMBNAIL_ZOOM_LEVELS[thumbnailZoomIndex] ?? DEFAULT_THUMBNAIL_ZOOM_PERCENT;
+  const thumbnailSize = getThumbnailSizeFromZoomPercent(thumbnailZoomPercent);
 
   useEffect(() => {
     void bootstrap();
@@ -211,6 +254,11 @@ export function App() {
       window.localStorage.setItem(ACCENT_COLOR_KEY, normalized);
     }
   }, [accentColor]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(THUMBNAIL_ZOOM_KEY, String(thumbnailZoomPercent));
+  }, [thumbnailZoomPercent]);
 
   useEffect(() => {
     if (!message && !error) return;
@@ -607,7 +655,7 @@ export function App() {
     }
 
     const blob = await response.blob();
-    const name = filePath.split(/[\/]/).pop() ?? "file";
+    const name = filePath.split(/[\\/]/).pop() ?? "file";
     return new File([blob], name, { type: blob.type || "application/octet-stream" });
   }
 
@@ -883,6 +931,13 @@ export function App() {
             items={visibleItems}
             isBusy={isBusy}
             isDraggingFiles={isDraggingFiles}
+            thumbnailSize={thumbnailSize}
+            thumbnailZoomIndex={thumbnailZoomIndex}
+            thumbnailZoomLevelCount={THUMBNAIL_ZOOM_LEVELS.length}
+            thumbnailZoomPercent={thumbnailZoomPercent}
+            onThumbnailZoomIndexChange={(nextIndex) =>
+              setThumbnailZoomIndex(clampNumber(nextIndex, 0, THUMBNAIL_ZOOM_LEVELS.length - 1))
+            }
             onRequestUpload={requestUpload}
             onDragEnter={handleFileDragEnter}
             onDragLeave={handleFileDragLeave}

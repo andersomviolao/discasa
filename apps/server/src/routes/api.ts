@@ -1,65 +1,47 @@
 import { Router } from "express";
 import multer from "multer";
+import { env } from "../lib/env";
 import {
   addAlbum,
   addMockFiles,
   addUploadedFiles,
-  applyPersistedIndexState,
+  createIndexSnapshot,
   deleteAlbum,
   deleteLibraryItem,
   getActiveStorageContext,
   getAlbums,
-  getIndexMessageId,
+  getLibraryItem,
   getLibraryItems,
-  getPersistedIndexState,
+  replaceDatabaseFromIndexSnapshot,
   renameAlbum,
   reorderAlbums,
   restoreLibraryItem,
   setActiveStorageContext,
-  setIndexMessageId,
   toggleFavoriteState,
   trashLibraryItem,
+  updateLibraryItemStorage,
 } from "../lib/store";
-import { env } from "../lib/env";
 import {
+  deleteStoredItemFromDiscord,
   initializeDiscasaInGuild,
   listEligibleGuilds,
-  loadPersistedIndexState,
-  persistIndexState,
+  moveStoredItemToTrash,
+  readLatestIndexSnapshot,
+  restoreStoredItemFromTrash,
+  syncIndexSnapshot,
   uploadFilesToDiscordDrive,
 } from "../services/discordService";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 
-async function persistRemoteIndexIfNeeded(): Promise<void> {
-  if (env.mockMode) {
+async function syncRemoteIndexState(): Promise<void> {
+  const context = getActiveStorageContext();
+  if (!context || env.mockMode) {
     return;
   }
 
-  const activeStorage = getActiveStorageContext();
-  if (!activeStorage) {
-    return;
-  }
-
-  const nextMessageId = await persistIndexState(activeStorage, getPersistedIndexState());
-  setIndexMessageId(nextMessageId);
-}
-
-async function loadStorageContextFromGuild(guildId: string) {
-  const nextContext = await initializeDiscasaInGuild(guildId);
-  const persisted = await loadPersistedIndexState(nextContext);
-
-  applyPersistedIndexState(
-    persisted?.state ?? {
-      albums: [],
-      items: [],
-    },
-    nextContext,
-    persisted?.messageId ?? getIndexMessageId(),
-  );
-
-  return nextContext;
+  await syncIndexSnapshot(context, createIndexSnapshot());
 }
 
 router.get("/session", (request, response) => {
@@ -107,13 +89,21 @@ router.post("/discasa/initialize", async (request, response, next) => {
       return;
     }
 
-    const activeStorage = await loadStorageContextFromGuild(guildId);
-    setActiveStorageContext(activeStorage);
+    const result = await initializeDiscasaInGuild(guildId);
+    setActiveStorageContext(result);
+
+    const snapshot = await readLatestIndexSnapshot(result);
+
+    if (snapshot) {
+      replaceDatabaseFromIndexSnapshot(snapshot);
+    } else {
+      await syncIndexSnapshot(result, createIndexSnapshot());
+    }
 
     response.json({
-      guildId: activeStorage.guildId,
-      categoryName: activeStorage.categoryName,
-      channels: [activeStorage.driveChannelName, activeStorage.indexChannelName, activeStorage.trashChannelName],
+      guildId: result.guildId,
+      categoryName: result.categoryName,
+      channels: [result.driveChannelName, result.indexChannelName, result.trashChannelName],
     });
   } catch (error) {
     next(error);
@@ -134,7 +124,7 @@ router.post("/albums", async (request, response, next) => {
     }
 
     const created = addAlbum(name);
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.status(201).json({ id: created.id });
   } catch (error) {
     next(error);
@@ -158,7 +148,7 @@ router.patch("/albums/:albumId", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json(updated);
   } catch (error) {
     next(error);
@@ -177,7 +167,7 @@ router.put("/albums/reorder", async (request, response, next) => {
     }
 
     const albums = reorderAlbums(orderedIds);
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ albums });
   } catch (error) {
     next(error);
@@ -200,7 +190,7 @@ router.delete("/albums/:albumId", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ deleted: true });
   } catch (error) {
     next(error);
@@ -228,14 +218,15 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
     }
 
     const activeStorage = getActiveStorageContext();
+
     if (!activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before uploading files." });
       return;
     }
 
-    const uploadedFiles = await uploadFilesToDiscordDrive(files, activeStorage);
-    const uploaded = addUploadedFiles(uploadedFiles, albumId);
-    await persistRemoteIndexIfNeeded();
+    const uploadedRecords = await uploadFilesToDiscordDrive(files, activeStorage);
+    const uploaded = addUploadedFiles(uploadedRecords, albumId);
+    await syncRemoteIndexState();
     response.status(201).json({ uploaded });
   } catch (error) {
     next(error);
@@ -252,7 +243,7 @@ router.patch("/library/:itemId/favorite", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -262,6 +253,29 @@ router.patch("/library/:itemId/favorite", async (request, response, next) => {
 router.patch("/library/:itemId/trash", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
+    const originalItem = getLibraryItem(itemId);
+
+    if (!originalItem) {
+      response.status(404).json({ error: "Library item not found" });
+      return;
+    }
+
+    if (!env.mockMode) {
+      const activeStorage = getActiveStorageContext();
+      if (!activeStorage) {
+        response.status(400).json({ error: "Apply a Discord server in Settings before using the trash." });
+        return;
+      }
+
+      const movedRecord = await moveStoredItemToTrash(activeStorage, originalItem);
+      updateLibraryItemStorage(itemId, {
+        guildId: movedRecord.guildId,
+        attachmentUrl: movedRecord.attachmentUrl,
+        storageChannelId: movedRecord.storageChannelId,
+        storageMessageId: movedRecord.storageMessageId,
+      });
+    }
+
     const item = trashLibraryItem(itemId);
 
     if (!item) {
@@ -269,7 +283,7 @@ router.patch("/library/:itemId/trash", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -279,6 +293,29 @@ router.patch("/library/:itemId/trash", async (request, response, next) => {
 router.patch("/library/:itemId/restore", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
+    const originalItem = getLibraryItem(itemId);
+
+    if (!originalItem) {
+      response.status(404).json({ error: "Library item not found" });
+      return;
+    }
+
+    if (!env.mockMode) {
+      const activeStorage = getActiveStorageContext();
+      if (!activeStorage) {
+        response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
+        return;
+      }
+
+      const movedRecord = await restoreStoredItemFromTrash(activeStorage, originalItem);
+      updateLibraryItemStorage(itemId, {
+        guildId: movedRecord.guildId,
+        attachmentUrl: movedRecord.attachmentUrl,
+        storageChannelId: movedRecord.storageChannelId,
+        storageMessageId: movedRecord.storageMessageId,
+      });
+    }
+
     const item = restoreLibraryItem(itemId);
 
     if (!item) {
@@ -286,7 +323,7 @@ router.patch("/library/:itemId/restore", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -296,6 +333,23 @@ router.patch("/library/:itemId/restore", async (request, response, next) => {
 router.delete("/library/:itemId", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
+    const originalItem = getLibraryItem(itemId);
+
+    if (!originalItem) {
+      response.status(404).json({ error: "Library item not found" });
+      return;
+    }
+
+    if (!env.mockMode) {
+      const activeStorage = getActiveStorageContext();
+      if (!activeStorage) {
+        response.status(400).json({ error: "Apply a Discord server in Settings before deleting files." });
+        return;
+      }
+
+      await deleteStoredItemFromDiscord(activeStorage, originalItem);
+    }
+
     const deleted = deleteLibraryItem(itemId);
 
     if (!deleted) {
@@ -303,7 +357,7 @@ router.delete("/library/:itemId", async (request, response, next) => {
       return;
     }
 
-    await persistRemoteIndexIfNeeded();
+    await syncRemoteIndexState();
     response.json({ deleted: true });
   } catch (error) {
     next(error);

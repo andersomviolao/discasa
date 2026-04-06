@@ -53,6 +53,8 @@ export type LibraryItem = {
   attachmentUrl: string;
   isFavorite: boolean;
   isTrashed: boolean;
+  storageChannelId?: string;
+  storageMessageId?: string;
 };
 
 export type UploadResponse = {

@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties, type DragEvent } from "react";
+import { useMemo, useState, type CSSProperties, type ChangeEvent, type DragEvent, type ReactNode } from "react";
 import type { LibraryItem } from "@discasa/shared";
 import { getFileTypeLabel, isImage, isVideo } from "../lib/library-helpers";
 import { UploadIcon } from "./icons";
@@ -9,6 +9,11 @@ type LibraryPanelProps = {
   items: LibraryItem[];
   isBusy: boolean;
   isDraggingFiles: boolean;
+  thumbnailSize: number;
+  thumbnailZoomIndex: number;
+  thumbnailZoomLevelCount: number;
+  thumbnailZoomPercent: number;
+  onThumbnailZoomIndexChange: (nextIndex: number) => void;
   onRequestUpload: () => void;
   onDragEnter: (event: DragEvent<HTMLElement>) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
@@ -21,11 +26,6 @@ type LibraryPanelProps = {
 };
 
 const bytesFormatter = new Intl.NumberFormat("en-US");
-
-const previewLayerStyle: CSSProperties = {
-  position: "absolute",
-  inset: 0,
-};
 
 const previewMediaStyle: CSSProperties = {
   width: "100%",
@@ -102,6 +102,41 @@ const previewVideoBadgeStyle: CSSProperties = {
   letterSpacing: "0.08em",
 };
 
+function HeartIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path
+        d="M12 20.7 4.85 13.9a4.95 4.95 0 0 1 0-7.15 5.15 5.15 0 0 1 7.15 0L12 7.75l1-1a5.15 5.15 0 0 1 7.15 0 4.95 4.95 0 0 1 0 7.15Z"
+        fill={filled ? "currentColor" : "none"}
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4 7h16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M9 4h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M8 7v11a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 11v5M14 11v5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RestoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M9 10H4V5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.6 10A8 8 0 1 0 12 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function getFileExtension(fileName: string): string {
   const trimmed = fileName.trim();
   const parts = trimmed.split(".");
@@ -138,7 +173,7 @@ function getFallbackLabel(item: LibraryItem): string {
   return item.mimeType.split("/")[0]?.toUpperCase() || "FILE";
 }
 
-function FileThumbnail({ item }: { item: LibraryItem }) {
+function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNode }) {
   const [hasPreviewError, setHasPreviewError] = useState(false);
 
   const extension = useMemo(() => getFileExtension(item.name), [item.name]);
@@ -176,7 +211,7 @@ function FileThumbnail({ item }: { item: LibraryItem }) {
           />
           <div aria-hidden="true" style={previewShadeStyle} />
           <span aria-hidden="true" style={previewVideoBadgeStyle}>
-            PREVIEW
+            Preview
           </span>
         </>
       ) : null}
@@ -188,9 +223,8 @@ function FileThumbnail({ item }: { item: LibraryItem }) {
         </div>
       ) : null}
 
-      <div aria-hidden="true" style={previewLayerStyle}>
-        <span className="file-type-chip">{getFileTypeLabel(item)}</span>
-      </div>
+      <span className="file-type-chip">{getFileTypeLabel(item)}</span>
+      <div className="file-preview-actions">{actions}</div>
     </div>
   );
 }
@@ -201,6 +235,11 @@ export function LibraryPanel({
   items,
   isBusy,
   isDraggingFiles,
+  thumbnailSize,
+  thumbnailZoomIndex,
+  thumbnailZoomLevelCount,
+  thumbnailZoomPercent,
+  onThumbnailZoomIndexChange,
   onRequestUpload,
   onDragEnter,
   onDragLeave,
@@ -211,33 +250,57 @@ export function LibraryPanel({
   onRestoreFromTrash,
   onDeleteItem,
 }: LibraryPanelProps) {
-  function renderCardActions(item: LibraryItem) {
+  function handleThumbnailZoomChange(event: ChangeEvent<HTMLInputElement>): void {
+    onThumbnailZoomIndexChange(Number(event.currentTarget.value));
+  }
+
+  function renderThumbnailActions(item: LibraryItem) {
     if (item.isTrashed) {
       return (
-        <div className="file-actions">
-          <button type="button" className="pill-button file-action-button" onClick={() => void onRestoreFromTrash(item.id)}>
-            Restore
+        <>
+          <button
+            type="button"
+            className="file-icon-button"
+            onClick={() => void onRestoreFromTrash(item.id)}
+            aria-label="Restore"
+            title="Restore"
+          >
+            <RestoreIcon />
           </button>
-          <button type="button" className="pill-button file-action-button danger" onClick={() => void onDeleteItem(item.id)}>
-            Delete
+          <button
+            type="button"
+            className="file-icon-button danger"
+            onClick={() => void onDeleteItem(item.id)}
+            aria-label="Delete permanently"
+            title="Delete permanently"
+          >
+            <TrashIcon />
           </button>
-        </div>
+        </>
       );
     }
 
     return (
-      <div className="file-actions">
+      <>
         <button
           type="button"
-          className={`pill-button file-action-button ${item.isFavorite ? "active" : ""}`}
+          className={`file-icon-button ${item.isFavorite ? "active" : ""}`}
           onClick={() => void onToggleFavorite(item.id)}
+          aria-label={item.isFavorite ? "Unfavorite" : "Favorite"}
+          title={item.isFavorite ? "Unfavorite" : "Favorite"}
         >
-          {item.isFavorite ? "Unfavorite" : "Favorite"}
+          <HeartIcon filled={item.isFavorite} />
         </button>
-        <button type="button" className="pill-button file-action-button" onClick={() => void onMoveToTrash(item.id)}>
-          Trash
+        <button
+          type="button"
+          className="file-icon-button danger"
+          onClick={() => void onMoveToTrash(item.id)}
+          aria-label="Trash"
+          title="Trash"
+        >
+          <TrashIcon />
         </button>
-      </div>
+      </>
     );
   }
 
@@ -257,19 +320,38 @@ export function LibraryPanel({
           <p>{description}</p>
         </div>
 
-        <button type="button" className="icon-circle-button upload-button" onClick={onRequestUpload} aria-label="Upload" title="Upload">
-          <UploadIcon />
-        </button>
+        <div className="library-tools">
+          <label className="thumbnail-zoom-control" title="Thumbnail zoom">
+            <span className="thumbnail-zoom-label">Zoom</span>
+            <input
+              className="thumbnail-zoom-slider"
+              type="range"
+              min={0}
+              max={thumbnailZoomLevelCount - 1}
+              step={1}
+              value={thumbnailZoomIndex}
+              onChange={handleThumbnailZoomChange}
+              aria-label="Thumbnail zoom"
+            />
+            <span className="thumbnail-zoom-value">{thumbnailZoomPercent}%</span>
+          </label>
+
+          <button type="button" className="icon-circle-button upload-button" onClick={onRequestUpload} aria-label="Upload" title="Upload">
+            <UploadIcon />
+          </button>
+        </div>
       </div>
 
-      <div className="files-grid scrollable-y subtle-scrollbar content-scrollbar-host">
+      <div
+        className="files-grid scrollable-y subtle-scrollbar content-scrollbar-host"
+        style={{ "--file-card-width": `${thumbnailSize}px` } as CSSProperties}
+      >
         {items.map((item) => (
           <article key={item.id} className="file-card" title={item.name}>
-            <FileThumbnail item={item} />
+            <FileThumbnail item={item} actions={renderThumbnailActions(item)} />
             <div className="file-meta">
               <span className="file-name">{item.name}</span>
               <small className="file-size">{bytesFormatter.format(item.size)} bytes</small>
-              {renderCardActions(item)}
             </div>
           </article>
         ))}

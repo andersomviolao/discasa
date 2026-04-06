@@ -1,6 +1,12 @@
 import dotenv from "dotenv";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-dotenv.config({ path: new URL("../../../../.env", import.meta.url).pathname });
+const currentFilePath = fileURLToPath(import.meta.url);
+const currentDirPath = path.dirname(currentFilePath);
+const rootEnvPath = path.resolve(currentDirPath, "../../../../.env");
+
+dotenv.config({ path: rootEnvPath });
 
 type Environment = {
   port: number;

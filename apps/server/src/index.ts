@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import session from "express-session";
+import { hydrateSessionFromPersistedAuth } from "./lib/auth-store";
 import { apiRouter } from "./routes/api";
 import { authRouter } from "./routes/auth";
 import { env } from "./lib/env";
@@ -40,6 +41,19 @@ app.use(
     },
   }),
 );
+
+app.use((request, _response, next) => {
+  const needsHydration =
+    !request.session.authenticated ||
+    !request.session.user ||
+    !request.session.discordAccessToken;
+
+  if (needsHydration) {
+    hydrateSessionFromPersistedAuth(request.session);
+  }
+
+  next();
+});
 
 app.get("/health", (_request, response) => {
   response.json({ ok: true, mockMode: env.mockMode });

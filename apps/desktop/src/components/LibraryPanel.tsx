@@ -39,7 +39,7 @@ const previewShadeStyle: CSSProperties = {
   position: "absolute",
   inset: 0,
   pointerEvents: "none",
-  background: "linear-gradient(180deg, rgba(5, 10, 18, 0.16) 0%, rgba(5, 10, 18, 0.02) 38%, rgba(5, 10, 18, 0.48) 100%)",
+  background: "linear-gradient(180deg, rgba(5, 10, 18, 0.12) 0%, rgba(5, 10, 18, 0.02) 38%, rgba(5, 10, 18, 0.30) 100%)",
 };
 
 const previewFallbackStyle: CSSProperties = {
@@ -87,17 +87,17 @@ const previewCaptionStyle: CSSProperties = {
 
 const previewVideoBadgeStyle: CSSProperties = {
   position: "absolute",
-  right: "12px",
-  bottom: "12px",
+  right: "10px",
+  bottom: "10px",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  minHeight: "24px",
-  padding: "0 10px",
+  minHeight: "20px",
+  padding: "0 8px",
   borderRadius: "999px",
-  background: "rgba(8, 14, 24, 0.82)",
-  color: "rgba(255, 255, 255, 0.88)",
-  fontSize: "11px",
+  background: "rgba(8, 14, 24, 0.76)",
+  color: "rgba(255, 255, 255, 0.82)",
+  fontSize: "10px",
   fontWeight: 600,
   letterSpacing: "0.08em",
 };
@@ -182,49 +182,51 @@ function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNod
   const canRenderVideo = isVideo(item) && !hasPreviewError;
 
   return (
-    <div className="file-preview">
-      {canRenderImage ? (
-        <>
-          <img
-            src={item.attachmentUrl}
-            alt={item.name}
-            loading="lazy"
-            draggable={false}
-            style={previewMediaStyle}
-            onError={() => setHasPreviewError(true)}
-          />
-          <div aria-hidden="true" style={previewShadeStyle} />
-        </>
-      ) : null}
+    <div className="file-card" title={item.name}>
+      <div className="file-preview">
+        {canRenderImage ? (
+          <>
+            <img
+              src={item.attachmentUrl}
+              alt={item.name}
+              loading="lazy"
+              draggable={false}
+              style={previewMediaStyle}
+              onError={() => setHasPreviewError(true)}
+            />
+            <div aria-hidden="true" style={previewShadeStyle} />
+          </>
+        ) : null}
 
-      {canRenderVideo ? (
-        <>
-          <video
-            src={item.attachmentUrl}
-            preload="metadata"
-            muted
-            playsInline
-            disablePictureInPicture
-            controls={false}
-            style={previewMediaStyle}
-            onError={() => setHasPreviewError(true)}
-          />
-          <div aria-hidden="true" style={previewShadeStyle} />
-          <span aria-hidden="true" style={previewVideoBadgeStyle}>
-            Preview
-          </span>
-        </>
-      ) : null}
+        {canRenderVideo ? (
+          <>
+            <video
+              src={item.attachmentUrl}
+              preload="metadata"
+              muted
+              playsInline
+              disablePictureInPicture
+              controls={false}
+              style={previewMediaStyle}
+              onError={() => setHasPreviewError(true)}
+            />
+            <div aria-hidden="true" style={previewShadeStyle} />
+            <span aria-hidden="true" style={previewVideoBadgeStyle}>
+              Preview
+            </span>
+          </>
+        ) : null}
 
-      {!canRenderImage && !canRenderVideo ? (
-        <div aria-hidden="true" style={previewFallbackStyle}>
-          <span style={previewExtensionStyle}>{extension}</span>
-          <span style={previewCaptionStyle}>{fallbackLabel}</span>
-        </div>
-      ) : null}
+        {!canRenderImage && !canRenderVideo ? (
+          <div aria-hidden="true" style={previewFallbackStyle}>
+            <span style={previewExtensionStyle}>{extension}</span>
+            <span style={previewCaptionStyle}>{fallbackLabel}</span>
+          </div>
+        ) : null}
 
-      <span className="file-type-chip">{getFileTypeLabel(item)}</span>
-      <div className="file-preview-actions">{actions}</div>
+        <span className="file-type-chip">{getFileTypeLabel(item)}</span>
+        <div className="file-preview-actions">{actions}</div>
+      </div>
     </div>
   );
 }
@@ -347,7 +349,7 @@ export function LibraryPanel({
         style={{ "--file-card-width": `${thumbnailSize}px` } as CSSProperties}
       >
         {items.map((item) => (
-          <article key={item.id} className="file-card" title={item.name}>
+          <article key={item.id} className="file-tile" title={item.name}>
             <FileThumbnail item={item} actions={renderThumbnailActions(item)} />
             <div className="file-meta">
               <span className="file-name">{item.name}</span>

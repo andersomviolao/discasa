@@ -43,8 +43,8 @@ const ACTIVE_GUILD_NAME_KEY = "discasa.discord.activeGuildName";
 const THUMBNAIL_ZOOM_KEY = "discasa.library.thumbnailZoomPercent";
 const DEFAULT_ACCENT_HEX = "#E9881D";
 const THUMBNAIL_BASE_SIZE = 400;
-const THUMBNAIL_ZOOM_LEVELS = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] as const;
-const DEFAULT_THUMBNAIL_ZOOM_PERCENT = 50;
+const THUMBNAIL_ZOOM_LEVELS = [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] as const;
+const DEFAULT_THUMBNAIL_ZOOM_PERCENT = 35;
 
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;

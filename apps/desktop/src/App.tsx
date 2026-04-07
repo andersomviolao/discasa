@@ -178,6 +178,7 @@ export function App() {
   const [discordSettingsError, setDiscordSettingsError] = useState("");
   const [authSetupStep, setAuthSetupStep] = useState<AuthSetupStep | null>(null);
   const [authSetupError, setAuthSetupError] = useState("");
+  const [hasOpenedBotInvite, setHasOpenedBotInvite] = useState(false);
   const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [items, setItems] = useState<LibraryItem[]>([]);
   const [selectedView, setSelectedView] = useState<SidebarView>({ kind: "library", id: "all-files" });
@@ -581,6 +582,7 @@ export function App() {
       }
 
       setAuthSetupError("");
+      setHasOpenedBotInvite(false);
       setAuthSetupStep(getRequiredAuthSetupStep(session));
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to load Discasa preview.");
@@ -969,6 +971,7 @@ export function App() {
     setIsSettingsOpen(false);
     setDiscordSettingsError("");
     setAuthSetupError("");
+    setHasOpenedBotInvite(false);
     setAuthSetupStep("waiting");
 
     try {
@@ -988,6 +991,33 @@ export function App() {
   function handleConfirmSetupGuildSelection(): void {
     if (!selectedGuildId) {
       setAuthSetupError("Select a server first.");
+      return;
+    }
+
+    setAuthSetupError("");
+    setHasOpenedBotInvite(false);
+    setAuthSetupStep("invite-bot");
+  }
+
+  function handleOpenBotInviteFromSetup(): void {
+    if (!selectedGuildId) {
+      setAuthSetupError("Select a server first.");
+      return;
+    }
+
+    setAuthSetupError("");
+    openDiscordBotInstall(selectedGuildId);
+    setHasOpenedBotInvite(true);
+  }
+
+  function handleContinueToApplyFromSetup(): void {
+    if (!selectedGuildId) {
+      setAuthSetupError("Select a server first.");
+      return;
+    }
+
+    if (!hasOpenedBotInvite) {
+      setAuthSetupError("Invite the bot before continuing.");
       return;
     }
 
@@ -1302,15 +1332,18 @@ export function App() {
           error={authSetupError}
           isLoadingGuilds={isLoadingGuilds}
           isApplyingGuild={isApplyingGuild}
+          hasOpenedBotInvite={hasOpenedBotInvite}
           onStartLogin={() => {
             void handleOpenDiscordLoginFlow();
           }}
           onSelectGuild={(guildId) => {
             setSelectedGuildId(guildId);
+            setHasOpenedBotInvite(false);
             setAuthSetupError("");
           }}
           onConfirmGuild={handleConfirmSetupGuildSelection}
           onBackToLogin={() => {
+            setHasOpenedBotInvite(false);
             setAuthSetupError("");
             setAuthSetupStep("login");
           }}
@@ -1321,6 +1354,8 @@ export function App() {
           onRetryGuilds={() => {
             void handleRefreshGuildSetup();
           }}
+          onOpenBotInvite={handleOpenBotInviteFromSetup}
+          onContinueToApply={handleContinueToApplyFromSetup}
           onApplyGuild={() => {
             void handleApplyGuildFromSetup();
           }}

@@ -2,7 +2,7 @@ import type { ChangeEvent } from "react";
 import { DISCASA_CHANNELS, type GuildSummary } from "@discasa/shared";
 import { BaseModal } from "./BaseModal";
 
-export type AuthSetupStep = "login" | "waiting" | "select-server" | "apply-server";
+export type AuthSetupStep = "login" | "waiting" | "select-server" | "invite-bot" | "apply-server";
 
 type AuthSetupModalProps = {
   step: AuthSetupStep;
@@ -12,12 +12,15 @@ type AuthSetupModalProps = {
   error: string;
   isLoadingGuilds: boolean;
   isApplyingGuild: boolean;
+  hasOpenedBotInvite: boolean;
   onStartLogin: () => void;
   onSelectGuild: (guildId: string) => void;
   onConfirmGuild: () => void;
   onBackToLogin: () => void;
   onBackToServerSelection: () => void;
   onRetryGuilds: () => void;
+  onOpenBotInvite: () => void;
+  onContinueToApply: () => void;
   onApplyGuild: () => void;
 };
 
@@ -33,12 +36,15 @@ export function AuthSetupModal({
   error,
   isLoadingGuilds,
   isApplyingGuild,
+  hasOpenedBotInvite,
   onStartLogin,
   onSelectGuild,
   onConfirmGuild,
   onBackToLogin,
   onBackToServerSelection,
   onRetryGuilds,
+  onOpenBotInvite,
+  onContinueToApply,
   onApplyGuild,
 }: AuthSetupModalProps) {
   function renderLoginStep() {
@@ -146,6 +152,42 @@ export function AuthSetupModal({
     );
   }
 
+  function renderInviteBotStep() {
+    return (
+      <>
+        <div className="auth-setup-header">
+          <span className="auth-setup-eyebrow">Invite the bot</span>
+          <h2>Add the Discasa bot to {selectedGuildName ?? "the selected server"}</h2>
+          <p>
+            Before applying Discasa, invite the bot to the selected server in your browser. After finishing the Discord
+            authorization, return here and continue to the storage setup step.
+          </p>
+        </div>
+
+        <span className={`auth-setup-help ${error ? "error" : ""}`}>
+          {error || "Use the invite button below, complete the Discord authorization, then continue."}
+        </span>
+
+        <div className="auth-setup-actions spaced">
+          <button type="button" className="pill-button secondary-button" onClick={onBackToServerSelection}>
+            Back
+          </button>
+          <button type="button" className="pill-button secondary-button" onClick={onOpenBotInvite}>
+            {hasOpenedBotInvite ? "Open invite again" : "Invite bot"}
+          </button>
+          <button
+            type="button"
+            className="pill-button accent-button primary-button"
+            onClick={onContinueToApply}
+            disabled={!selectedGuildId || !hasOpenedBotInvite}
+          >
+            Continue
+          </button>
+        </div>
+      </>
+    );
+  }
+
   function renderApplyStep() {
     return (
       <>
@@ -199,6 +241,7 @@ export function AuthSetupModal({
         {step === "login" ? renderLoginStep() : null}
         {step === "waiting" ? renderWaitingStep() : null}
         {step === "select-server" ? renderServerSelectStep() : null}
+        {step === "invite-bot" ? renderInviteBotStep() : null}
         {step === "apply-server" ? renderApplyStep() : null}
       </div>
     </BaseModal>

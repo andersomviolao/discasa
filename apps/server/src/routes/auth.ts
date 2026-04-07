@@ -224,6 +224,7 @@ function buildBotPermissionInteger(): string {
     PermissionsBitField.Flags.AttachFiles,
     PermissionsBitField.Flags.ReadMessageHistory,
     PermissionsBitField.Flags.ManageChannels,
+    PermissionsBitField.Flags.ManageRoles,
   ]);
 
   return permissions.bitfield.toString();
@@ -270,7 +271,7 @@ router.get("/discord/install", (request, response) => {
   const guildId = typeof request.query.guildId === "string" ? request.query.guildId : "";
   const params = new URLSearchParams({
     client_id: env.discordClientId,
-    scope: "bot",
+    scope: "bot applications.commands",
     permissions: buildBotPermissionInteger(),
   });
 
@@ -281,7 +282,6 @@ router.get("/discord/install", (request, response) => {
 
   response.redirect(`https://discord.com/oauth2/authorize?${params.toString()}`);
 });
-
 
 router.post("/discord/logout", (request, response) => {
   clearPersistedAuthSession();

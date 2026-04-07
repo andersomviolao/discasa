@@ -90,23 +90,12 @@ async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserG
   }
 
   if (!response.ok) {
-    const errorDetails = {
+    console.error("[Discord API] Failed to fetch user guilds.", {
       endpoint,
       status: response.status,
       statusText: response.statusText,
       body: parsedBody,
-      headers: {
-        contentType: response.headers.get("content-type"),
-        wwwAuthenticate: response.headers.get("www-authenticate"),
-        xRateLimitLimit: response.headers.get("x-ratelimit-limit"),
-        xRateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
-        xRateLimitReset: response.headers.get("x-ratelimit-reset"),
-        retryAfter: response.headers.get("retry-after"),
-      },
-      tokenPreview: `${accessToken.slice(0, 6)}...${accessToken.slice(-4)}`,
-    };
-
-    console.error("[Discord API] Failed to fetch user guilds.", errorDetails);
+    });
 
     throw new Error(
       `Failed to fetch the user guild list from Discord (${response.status} ${response.statusText}).`,
@@ -114,12 +103,6 @@ async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserG
   }
 
   if (!Array.isArray(parsedBody)) {
-    console.error("[Discord API] Unexpected payload while fetching user guilds.", {
-      endpoint,
-      status: response.status,
-      body: parsedBody,
-    });
-
     throw new Error("Discord returned an unexpected guild list payload.");
   }
 
@@ -157,10 +140,33 @@ function getPermissionLabels(permissions: string, owner: boolean): string[] {
   return labels;
 }
 
-function buildDiscasaPermissionOverwrites(guild: Guild, botMemberId: string, authenticatedUserId?: string): OverwriteResolvable[] {
+async function resolveAuthenticatedUserOverwrite(guild: Guild, authenticatedUserId?: string): Promise<OverwriteResolvable | null> {
+  if (!authenticatedUserId) {
+    return null;
+  }
+
+  try {
+    const member = await guild.members.fetch(authenticatedUserId);
+    return {
+      id: member.user,
+      allow: [
+        PermissionsBitField.Flags.ViewChannel,
+        PermissionsBitField.Flags.ReadMessageHistory,
+      ],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function buildDiscasaPermissionOverwrites(
+  guild: Guild,
+  botMemberId: string,
+  authenticatedUserId?: string,
+): Promise<OverwriteResolvable[]> {
   const overwrites: OverwriteResolvable[] = [
     {
-      id: guild.roles.everyone.id,
+      id: guild.roles.everyone,
       deny: [PermissionsBitField.Flags.ViewChannel],
     },
     {
@@ -175,14 +181,9 @@ function buildDiscasaPermissionOverwrites(guild: Guild, botMemberId: string, aut
     },
   ];
 
-  if (authenticatedUserId) {
-    overwrites.push({
-      id: authenticatedUserId,
-      allow: [
-        PermissionsBitField.Flags.ViewChannel,
-        PermissionsBitField.Flags.ReadMessageHistory,
-      ],
-    });
+  const authenticatedUserOverwrite = await resolveAuthenticatedUserOverwrite(guild, authenticatedUserId);
+  if (authenticatedUserOverwrite) {
+    overwrites.push(authenticatedUserOverwrite);
   }
 
   return overwrites;
@@ -582,12 +583,17 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
 
   const botMember = await guild.members.fetchMe();
   const hasManageChannels = botMember.permissions.has(PermissionsBitField.Flags.ManageChannels);
+  const hasManageRoles = botMember.permissions.has(PermissionsBitField.Flags.ManageRoles);
 
   if (!hasManageChannels) {
     throw new Error("The bot is missing Manage Channels permission in the selected guild.");
   }
 
-  const discasaOverwrites = buildDiscasaPermissionOverwrites(guild, botMember.id, authenticatedUserId);
+  if (!hasManageRoles) {
+    throw new Error("To make Discasa private, grant the bot the Manage Roles permission in this server.");
+  }
+
+  const discasaOverwrites = await buildDiscasaPermissionOverwrites(guild, botMember.id, authenticatedUserId);
 
   const existingCategory = guild.channels.cache.find(
     (channel) => channel.type === ChannelType.GuildCategory && channel.name === DISCASA_CATEGORY_NAME,

@@ -59,17 +59,69 @@ async function getBotClient(): Promise<Client | null> {
 }
 
 async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {
-  const response = await fetch("https://discord.com/api/v10/users/@me/guilds", {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-  });
+  const endpoint = "https://discord.com/api/v10/users/@me/guilds";
+  let response: Response;
 
-  if (!response.ok) {
-    throw new Error("Failed to fetch the user guild list from Discord.");
+  try {
+    response = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+  } catch (error) {
+    console.error("[Discord API] Network failure while fetching user guilds.", {
+      endpoint,
+      error,
+    });
+    throw new Error("Failed to reach Discord while fetching the user guild list.");
   }
 
-  return (await response.json()) as DiscordUserGuild[];
+  const rawBody = await response.text();
+
+  let parsedBody: unknown = null;
+  if (rawBody.trim().length > 0) {
+    try {
+      parsedBody = JSON.parse(rawBody) as unknown;
+    } catch {
+      parsedBody = rawBody;
+    }
+  }
+
+  if (!response.ok) {
+    const errorDetails = {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+      body: parsedBody,
+      headers: {
+        contentType: response.headers.get("content-type"),
+        wwwAuthenticate: response.headers.get("www-authenticate"),
+        xRateLimitLimit: response.headers.get("x-ratelimit-limit"),
+        xRateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+        xRateLimitReset: response.headers.get("x-ratelimit-reset"),
+        retryAfter: response.headers.get("retry-after"),
+      },
+      tokenPreview: `${accessToken.slice(0, 6)}...${accessToken.slice(-4)}`,
+    };
+
+    console.error("[Discord API] Failed to fetch user guilds.", errorDetails);
+
+    throw new Error(
+      `Failed to fetch the user guild list from Discord (${response.status} ${response.statusText}).`,
+    );
+  }
+
+  if (!Array.isArray(parsedBody)) {
+    console.error("[Discord API] Unexpected payload while fetching user guilds.", {
+      endpoint,
+      status: response.status,
+      body: parsedBody,
+    });
+
+    throw new Error("Discord returned an unexpected guild list payload.");
+  }
+
+  return parsedBody as DiscordUserGuild[];
 }
 
 function hasManageAccess(permissions: string): boolean {

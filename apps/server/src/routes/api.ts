@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { env } from "../lib/env";
+import { getDiscordUploadLimitForGuild, getUploadTooLargeMessage } from "../lib/discordUploadLimit";
 import {
   addAlbum,
   addMockFiles,
@@ -343,6 +344,16 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
 
     if (!activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before uploading files." });
+      return;
+    }
+
+    const uploadLimitBytes = await getDiscordUploadLimitForGuild(activeStorage.guildId);
+    const oversizedFiles = files.filter((file) => file.size > uploadLimitBytes);
+
+    if (oversizedFiles.length > 0) {
+      response.status(413).json({
+        error: getUploadTooLargeMessage(oversizedFiles, uploadLimitBytes),
+      });
       return;
     }
 

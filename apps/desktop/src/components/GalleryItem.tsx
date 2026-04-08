@@ -79,6 +79,25 @@ const previewCaptionStyle: CSSProperties = {
   textOverflow: "ellipsis",
 };
 
+const editedBadgeStyle: CSSProperties = {
+  position: "absolute",
+  left: "10px",
+  top: "10px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: "22px",
+  padding: "0 8px",
+  borderRadius: "999px",
+  background: "rgba(var(--accent-rgb), 0.22)",
+  color: "rgba(255, 255, 255, 0.96)",
+  fontSize: "10px",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  pointerEvents: "none",
+};
+
 const bytesFormatter = new Intl.NumberFormat("en-US");
 
 function getFileExtension(fileName: string): string {
@@ -160,6 +179,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   const canRenderImage = isImage(item) && !hasPreviewError;
   const canRenderVideo = isVideo(item) && !hasPreviewError;
   const persistedMediaPresentation = useMemo(() => getPersistedMediaPresentation(item), [item]);
+  const hasSavedEdit = Boolean(item.savedMediaEdit);
 
   useEffect(() => {
     if (!canRenderImage || displayMode !== "free") {
@@ -252,6 +272,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
           </div>
         ) : null}
 
+        {hasSavedEdit ? <span style={editedBadgeStyle}>Edited</span> : null}
         <div className="file-preview-actions">{actions}</div>
       </div>
     </div>

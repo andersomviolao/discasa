@@ -178,6 +178,12 @@ export async function saveLibraryItemMediaEdit(
   });
 }
 
+export async function restoreLibraryItemOriginal(itemId: string): Promise<{ item: LibraryItem }> {
+  return requestJson<{ item: LibraryItem }>(`/api/library/${encodeURIComponent(itemId)}/media-edit`, {
+    method: "DELETE",
+  });
+}
+
 export async function deleteLibraryItem(itemId: string): Promise<{ deleted: true }> {
   return requestJson<{ deleted: true }>(`/api/library/${encodeURIComponent(itemId)}`, {
     method: "DELETE",

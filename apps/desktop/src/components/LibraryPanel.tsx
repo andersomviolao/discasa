@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import type { LibraryItem } from "@discasa/shared";
-import { saveLibraryItemMediaEdit } from "../lib/api";
+import { restoreLibraryItemOriginal, saveLibraryItemMediaEdit } from "../lib/api";
 import {
   createViewerDraftStateFromItem,
   hasPendingViewerSave,
@@ -163,6 +163,7 @@ export function LibraryPanel({
 
   const activeViewerItem = activeViewerIndex >= 0 ? displayItems[activeViewerIndex] ?? null : null;
   const viewerHasPendingSave = hasPendingViewerSave(activeViewerItem, viewerDraftState);
+  const viewerHasSavedEdit = Boolean(activeViewerItem?.savedMediaEdit);
 
   useEffect(() => {
     const handleViewerWheelBehaviorChange = (event: Event) => {
@@ -324,6 +325,39 @@ export function LibraryPanel({
     }
   }
 
+  async function handleRestoreViewerOriginal(): Promise<void> {
+    if (!activeViewerItem || !activeViewerItem.mimeType.startsWith("image/") || isSavingViewerEdit || !viewerHasSavedEdit) {
+      return;
+    }
+
+    setIsSavingViewerEdit(true);
+    setViewerSaveError("");
+    setViewerSaveNotice("");
+
+    try {
+      const response = await restoreLibraryItemOriginal(activeViewerItem.id);
+      setItemEditOverrides((current) => ({
+        ...current,
+        [activeViewerItem.id]: {
+          savedMediaEdit: response.item.savedMediaEdit ?? null,
+          originalSource: response.item.originalSource ?? null,
+        },
+      }));
+      setViewerDraftState(
+        createViewerDraftStateFromItem({
+          ...activeViewerItem,
+          savedMediaEdit: null,
+          originalSource: null,
+        }),
+      );
+      setViewerSaveNotice("Original restored for this image.");
+    } catch (caughtError) {
+      setViewerSaveError(caughtError instanceof Error ? caughtError.message : "Could not restore the original image.");
+    } finally {
+      setIsSavingViewerEdit(false);
+    }
+  }
+
   function renderThumbnailActions(item: LibraryItem) {
     if (item.isTrashed) {
       return (
@@ -475,6 +509,9 @@ export function LibraryPanel({
         onDraftStateChange={setViewerDraftState}
         onSave={() => {
           void handleSaveViewerEdit();
+        }}
+        onRestoreOriginal={() => {
+          void handleRestoreViewerOriginal();
         }}
         onClose={handleCloseViewer}
         onPrevious={() => {

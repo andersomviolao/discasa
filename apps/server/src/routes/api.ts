@@ -548,6 +548,39 @@ router.patch("/library/:itemId/media-edit", async (request, response, next) => {
   }
 });
 
+router.delete("/library/:itemId/media-edit", async (request, response, next) => {
+  try {
+    const itemId = String(request.params.itemId ?? "");
+    const originalItem = getLibraryItem(itemId);
+
+    if (!itemId) {
+      response.status(400).json({ error: "itemId is required" });
+      return;
+    }
+
+    if (!originalItem) {
+      response.status(404).json({ error: "Library item not found" });
+      return;
+    }
+
+    if (!originalItem.mimeType.startsWith("image/")) {
+      response.status(400).json({ error: "Only image items currently support restoring the original." });
+      return;
+    }
+
+    deleteLibraryItemMediaEdit(itemId);
+    response.json({
+      item: {
+        ...originalItem,
+        originalSource: null,
+        savedMediaEdit: null,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete("/library/:itemId", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");

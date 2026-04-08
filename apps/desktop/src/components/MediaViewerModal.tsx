@@ -15,6 +15,7 @@ type MediaViewerModalProps = {
   saveNotice: string;
   onDraftStateChange: (nextState: ViewerDraftState) => void;
   onSave: () => void;
+  onRestoreOriginal: () => void;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -110,6 +111,15 @@ function SaveIcon() {
   );
 }
 
+function RestoreOriginalIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9 10H4V5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4.6 10A8 8 0 1 0 12 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function clampZoom(value: number): number {
   return Math.min(5, Math.max(1, Number(value.toFixed(2))));
 }
@@ -139,6 +149,7 @@ export function MediaViewerModal({
   saveNotice,
   onDraftStateChange,
   onSave,
+  onRestoreOriginal,
   onClose,
   onPrevious,
   onNext,
@@ -147,6 +158,8 @@ export function MediaViewerModal({
   const isOpen = Boolean(item);
   const imageMode = item ? isImage(item) : false;
   const videoMode = item ? isVideo(item) : false;
+  const hasSavedEdit = Boolean(item?.savedMediaEdit);
+  const hasOriginalSource = Boolean(item?.originalSource);
 
   useEffect(() => {
     if (!isOpen) {
@@ -239,9 +252,13 @@ export function MediaViewerModal({
         <header className="media-viewer-header">
           <div className="media-viewer-heading">
             <strong className="media-viewer-title">{item.name}</strong>
-            <span className="media-viewer-counter">
-              {currentIndex + 1} / {totalItems}
-            </span>
+            <div className="media-viewer-heading-meta">
+              <span className="media-viewer-counter">
+                {currentIndex + 1} / {totalItems}
+              </span>
+              {hasSavedEdit ? <span className="media-viewer-edit-chip">Edited</span> : null}
+              {hasOriginalSource ? <span className="media-viewer-original-chip">Original preserved</span> : null}
+            </div>
           </div>
 
           <div className="media-viewer-header-actions">
@@ -376,6 +393,17 @@ export function MediaViewerModal({
               >
                 <span className="media-viewer-control-icon"><UndoIcon /></span>
                 <span className="media-viewer-control-label">Undo</span>
+              </button>
+
+              <button
+                type="button"
+                className={`media-viewer-control-button restore-original-button ${hasSavedEdit ? "active" : ""}`}
+                onClick={onRestoreOriginal}
+                disabled={!hasSavedEdit || isSaving}
+                title={hasSavedEdit ? "Restore the original saved image" : "No saved image edit to restore"}
+              >
+                <span className="media-viewer-control-icon"><RestoreOriginalIcon /></span>
+                <span className="media-viewer-control-label">Original</span>
               </button>
 
               <button

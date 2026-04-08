@@ -8,7 +8,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { GuildSummary } from "@discasa/shared";
-import type { SettingsSection } from "../ui-types";
+import type { MouseWheelBehavior, SettingsSection } from "../ui-types";
 import { logoutDiscord } from "../lib/api";
 import { BaseModal } from "./BaseModal";
 import { ProfileAvatar } from "./ProfileAvatar";
@@ -55,6 +55,27 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "window", label: "Window" },
 ];
+
+const VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY = "discasa.viewer.mouseWheelBehavior";
+const VIEWER_WHEEL_BEHAVIOR_EVENT = "discasa:viewer-wheel-behavior";
+
+function readStoredMouseWheelBehavior(): MouseWheelBehavior {
+  if (typeof window === "undefined") {
+    return "zoom";
+  }
+
+  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
+  return raw === "navigate" ? "navigate" : "zoom";
+}
+
+function commitMouseWheelBehavior(nextValue: MouseWheelBehavior): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY, nextValue);
+  window.dispatchEvent(new CustomEvent<MouseWheelBehavior>(VIEWER_WHEEL_BEHAVIOR_EVENT, { detail: nextValue }));
+}
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -511,6 +532,7 @@ export function SettingsModal(props: SettingsModalProps) {
 
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
+  const [mouseWheelBehavior, setMouseWheelBehavior] = useState<MouseWheelBehavior>(() => readStoredMouseWheelBehavior());
 
   async function handleLogout(): Promise<void> {
     setIsLoggingOut(true);
@@ -523,6 +545,11 @@ export function SettingsModal(props: SettingsModalProps) {
       setLogoutError(caughtError instanceof Error ? caughtError.message : "Could not logout from Discord.");
       setIsLoggingOut(false);
     }
+  }
+
+  function handleChangeMouseWheelBehavior(nextValue: MouseWheelBehavior): void {
+    setMouseWheelBehavior(nextValue);
+    commitMouseWheelBehavior(nextValue);
   }
 
   function renderDiscordContent() {
@@ -640,6 +667,24 @@ export function SettingsModal(props: SettingsModalProps) {
             />
             <span className="settings-switch" aria-hidden="true" />
           </label>
+
+          <div className="settings-field-stack">
+            <label className="settings-input-label" htmlFor="viewer-wheel-behavior">
+              Mouse wheel in viewer
+            </label>
+            <select
+              id="viewer-wheel-behavior"
+              className="form-text-input settings-select-input"
+              value={mouseWheelBehavior}
+              onChange={(event) => handleChangeMouseWheelBehavior(event.currentTarget.value as MouseWheelBehavior)}
+            >
+              <option value="zoom">Zoom image</option>
+              <option value="navigate">Go to previous / next item</option>
+            </select>
+            <span className="settings-input-help">
+              Choose whether the mouse wheel zooms images or navigates between items in the internal viewer.
+            </span>
+          </div>
         </div>
       </>
     );

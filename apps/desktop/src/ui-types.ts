@@ -20,6 +20,7 @@ export type GalleryDisplayMode = "free" | "square";
 export type MouseWheelBehavior = "zoom" | "navigate";
 
 export type ViewerDraftState = {
+  zoomLevel: number;
   rotationDegrees: number;
   hasCrop: boolean;
   canUndo: boolean;

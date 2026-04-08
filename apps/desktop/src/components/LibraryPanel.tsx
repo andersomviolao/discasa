@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import type { LibraryItem } from "@discasa/shared";
-import type { GalleryDisplayMode, ViewerState } from "../ui-types";
+import type { GalleryDisplayMode, MouseWheelBehavior, ViewerDraftState, ViewerState } from "../ui-types";
 import "../gallery-stage2.css";
 import { BulkActionBar } from "./BulkActionBar";
 import { LibraryToolbar } from "./LibraryToolbar";
@@ -33,6 +33,27 @@ type LibraryPanelProps = {
   onRestoreFromTrash: (itemId: string) => Promise<void>;
   onDeleteItem: (itemId: string) => Promise<void>;
 };
+
+const VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY = "discasa.viewer.mouseWheelBehavior";
+const VIEWER_WHEEL_BEHAVIOR_EVENT = "discasa:viewer-wheel-behavior";
+
+function readStoredMouseWheelBehavior(): MouseWheelBehavior {
+  if (typeof window === "undefined") {
+    return "zoom";
+  }
+
+  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
+  return raw === "navigate" ? "navigate" : "zoom";
+}
+
+function createDefaultViewerDraftState(): ViewerDraftState {
+  return {
+    zoomLevel: 1,
+    rotationDegrees: 0,
+    hasCrop: false,
+    canUndo: false,
+  };
+}
 
 function HeartIcon({ filled }: { filled: boolean }) {
   return (
@@ -96,6 +117,8 @@ export function LibraryPanel({
 }: LibraryPanelProps) {
   const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>("free");
   const [viewerState, setViewerState] = useState<ViewerState>(null);
+  const [viewerDraftState, setViewerDraftState] = useState<ViewerDraftState>(() => createDefaultViewerDraftState());
+  const [mouseWheelBehavior, setMouseWheelBehavior] = useState<MouseWheelBehavior>(() => readStoredMouseWheelBehavior());
 
   const thumbnailZoomProgress = useMemo(() => {
     if (thumbnailZoomLevelCount <= 1) {
@@ -126,7 +149,20 @@ export function LibraryPanel({
   const activeViewerItem = activeViewerIndex >= 0 ? items[activeViewerIndex] ?? null : null;
 
   useEffect(() => {
+    const handleWheelBehaviorChange = (event: Event) => {
+      const detail = (event as CustomEvent<MouseWheelBehavior>).detail;
+      setMouseWheelBehavior(detail === "navigate" ? "navigate" : "zoom");
+    };
+
+    window.addEventListener(VIEWER_WHEEL_BEHAVIOR_EVENT, handleWheelBehaviorChange as EventListener);
+    return () => {
+      window.removeEventListener(VIEWER_WHEEL_BEHAVIOR_EVENT, handleWheelBehaviorChange as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!viewerState) {
+      setViewerDraftState(createDefaultViewerDraftState());
       return;
     }
 
@@ -149,6 +185,14 @@ export function LibraryPanel({
       });
     }
   }, [items, viewerState]);
+
+  useEffect(() => {
+    if (!viewerState) {
+      return;
+    }
+
+    setViewerDraftState(createDefaultViewerDraftState());
+  }, [viewerState?.itemId]);
 
   async function handleBulkFavoriteToggle(): Promise<void> {
     if (isBusy || selectedItems.length === 0) {
@@ -194,6 +238,7 @@ export function LibraryPanel({
       return;
     }
 
+    setViewerDraftState(createDefaultViewerDraftState());
     setViewerState({
       itemId,
       index,
@@ -203,6 +248,7 @@ export function LibraryPanel({
 
   function handleCloseViewer(): void {
     setViewerState(null);
+    setViewerDraftState(createDefaultViewerDraftState());
   }
 
   function handleNavigateViewer(direction: "previous" | "next"): void {
@@ -220,6 +266,7 @@ export function LibraryPanel({
       return;
     }
 
+    setViewerDraftState(createDefaultViewerDraftState());
     setViewerState({
       itemId: items[nextIndex]?.id ?? viewerState.itemId,
       index: nextIndex,
@@ -369,6 +416,9 @@ export function LibraryPanel({
         item={activeViewerItem}
         currentIndex={activeViewerIndex}
         totalItems={items.length}
+        wheelBehavior={mouseWheelBehavior}
+        draftState={viewerDraftState}
+        onDraftStateChange={setViewerDraftState}
         onClose={handleCloseViewer}
         onPrevious={() => {
           handleNavigateViewer("previous");

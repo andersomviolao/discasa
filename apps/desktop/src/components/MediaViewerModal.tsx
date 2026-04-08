@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useState, type WheelEvent } from "react";
+import { useEffect, useMemo, useRef, type WheelEvent } from "react";
 import type { LibraryItem } from "@discasa/shared";
+import type { MouseWheelBehavior, ViewerDraftState } from "../ui-types";
 import { isImage, isVideo } from "../lib/library-helpers";
 
 type MediaViewerModalProps = {
   item: LibraryItem | null;
   currentIndex: number;
   totalItems: number;
+  wheelBehavior: MouseWheelBehavior;
+  draftState: ViewerDraftState;
+  onDraftStateChange: (nextState: ViewerDraftState) => void;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -105,31 +109,34 @@ function clampZoom(value: number): number {
   return Math.min(5, Math.max(1, Number(value.toFixed(2))));
 }
 
+function normalizeDraftState(nextState: Omit<ViewerDraftState, "canUndo">): ViewerDraftState {
+  const zoomLevel = clampZoom(nextState.zoomLevel);
+  const rotationDegrees = nextState.rotationDegrees;
+  const hasCrop = nextState.hasCrop;
+
+  return {
+    zoomLevel,
+    rotationDegrees,
+    hasCrop,
+    canUndo: zoomLevel !== 1 || rotationDegrees !== 0 || hasCrop,
+  };
+}
+
 export function MediaViewerModal({
   item,
   currentIndex,
   totalItems,
+  wheelBehavior,
+  draftState,
+  onDraftStateChange,
   onClose,
   onPrevious,
   onNext,
 }: MediaViewerModalProps) {
+  const lastWheelNavigationAtRef = useRef(0);
   const isOpen = Boolean(item);
   const imageMode = item ? isImage(item) : false;
   const videoMode = item ? isVideo(item) : false;
-
-  const [zoomLevel, setZoomLevel] = useState(1);
-  const [rotationDegrees, setRotationDegrees] = useState(0);
-  const [hasCrop, setHasCrop] = useState(false);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    setZoomLevel(1);
-    setRotationDegrees(0);
-    setHasCrop(false);
-  }, [isOpen, item?.id]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -156,14 +163,33 @@ export function MediaViewerModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, onClose, onNext, onPrevious]);
 
-  const canUndo = zoomLevel !== 1 || rotationDegrees !== 0 || hasCrop;
   const canGoPrevious = currentIndex > 0;
   const canGoNext = currentIndex >= 0 && currentIndex < totalItems - 1;
 
   const mediaTransform = useMemo(
-    () => `translate(-50%, -50%) scale(${zoomLevel}) rotate(${rotationDegrees}deg)`,
-    [rotationDegrees, zoomLevel],
+    () => `translate(-50%, -50%) scale(${draftState.zoomLevel}) rotate(${draftState.rotationDegrees}deg)`,
+    [draftState.rotationDegrees, draftState.zoomLevel],
   );
+
+  function updateDraftState(patch: Partial<Omit<ViewerDraftState, "canUndo">>): void {
+    onDraftStateChange(
+      normalizeDraftState({
+        zoomLevel: patch.zoomLevel ?? draftState.zoomLevel,
+        rotationDegrees: patch.rotationDegrees ?? draftState.rotationDegrees,
+        hasCrop: patch.hasCrop ?? draftState.hasCrop,
+      }),
+    );
+  }
+
+  function resetDraftState(): void {
+    onDraftStateChange(
+      normalizeDraftState({
+        zoomLevel: 1,
+        rotationDegrees: 0,
+        hasCrop: false,
+      }),
+    );
+  }
 
   function handleWheel(event: WheelEvent<HTMLDivElement>): void {
     if (!imageMode) {
@@ -171,8 +197,24 @@ export function MediaViewerModal({
     }
 
     event.preventDefault();
+
+    if (wheelBehavior === "navigate") {
+      const now = Date.now();
+      if (now - lastWheelNavigationAtRef.current < 240) {
+        return;
+      }
+
+      lastWheelNavigationAtRef.current = now;
+      if (event.deltaY < 0) {
+        onPrevious();
+      } else {
+        onNext();
+      }
+      return;
+    }
+
     const direction = event.deltaY < 0 ? 0.14 : -0.14;
-    setZoomLevel((current) => clampZoom(current + direction));
+    updateDraftState({ zoomLevel: draftState.zoomLevel + direction });
   }
 
   if (!item) {
@@ -212,7 +254,7 @@ export function MediaViewerModal({
           </button>
 
           <div
-            className={`media-viewer-viewport ${imageMode ? "image-mode" : ""} ${videoMode ? "video-mode" : ""} ${hasCrop ? "crop-active" : ""}`}
+            className={`media-viewer-viewport ${imageMode ? "image-mode" : ""} ${videoMode ? "video-mode" : ""} ${draftState.hasCrop ? "crop-active" : ""}`}
             onWheel={handleWheel}
           >
             {imageMode ? (
@@ -223,7 +265,7 @@ export function MediaViewerModal({
                 draggable={false}
                 style={{
                   transform: mediaTransform,
-                  objectFit: hasCrop ? "cover" : "contain",
+                  objectFit: draftState.hasCrop ? "cover" : "contain",
                 }}
               />
             ) : null}
@@ -266,8 +308,8 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => setZoomLevel((current) => clampZoom(current - 0.2))}
-                disabled={zoomLevel <= 1}
+                onClick={() => updateDraftState({ zoomLevel: draftState.zoomLevel - 0.2 })}
+                disabled={draftState.zoomLevel <= 1}
                 title="Zoom out"
               >
                 <span className="media-viewer-control-icon"><ZoomOutIcon /></span>
@@ -277,8 +319,8 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => setZoomLevel((current) => clampZoom(current + 0.2))}
-                disabled={zoomLevel >= 5}
+                onClick={() => updateDraftState({ zoomLevel: draftState.zoomLevel + 0.2 })}
+                disabled={draftState.zoomLevel >= 5}
                 title="Zoom in"
               >
                 <span className="media-viewer-control-icon"><ZoomInIcon /></span>
@@ -288,7 +330,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => setRotationDegrees((current) => current - 90)}
+                onClick={() => updateDraftState({ rotationDegrees: draftState.rotationDegrees - 90 })}
                 title="Rotate left"
               >
                 <span className="media-viewer-control-icon"><RotateLeftIcon /></span>
@@ -298,7 +340,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => setRotationDegrees((current) => current + 90)}
+                onClick={() => updateDraftState({ rotationDegrees: draftState.rotationDegrees + 90 })}
                 title="Rotate right"
               >
                 <span className="media-viewer-control-icon"><RotateRightIcon /></span>
@@ -307,9 +349,9 @@ export function MediaViewerModal({
 
               <button
                 type="button"
-                className={`media-viewer-control-button ${hasCrop ? "active" : ""}`}
-                onClick={() => setHasCrop((current) => !current)}
-                title={hasCrop ? "Disable crop preview" : "Enable crop preview"}
+                className={`media-viewer-control-button ${draftState.hasCrop ? "active" : ""}`}
+                onClick={() => updateDraftState({ hasCrop: !draftState.hasCrop })}
+                title={draftState.hasCrop ? "Disable crop preview" : "Enable crop preview"}
               >
                 <span className="media-viewer-control-icon"><CropIcon /></span>
                 <span className="media-viewer-control-label">Crop</span>
@@ -318,12 +360,8 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => {
-                  setZoomLevel(1);
-                  setRotationDegrees(0);
-                  setHasCrop(false);
-                }}
-                disabled={!canUndo}
+                onClick={resetDraftState}
+                disabled={!draftState.canUndo}
                 title="Undo local edits"
               >
                 <span className="media-viewer-control-icon"><UndoIcon /></span>
@@ -347,7 +385,7 @@ export function MediaViewerModal({
           )}
 
           <div className="media-viewer-zoom-readout" aria-live="polite">
-            {imageMode ? `${Math.round(zoomLevel * 100)}%` : "Preview"}
+            {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : "Preview"}
           </div>
         </footer>
       </div>

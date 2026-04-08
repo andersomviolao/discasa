@@ -7,7 +7,6 @@ import {
 } from "../lib/media-edits";
 import { readStoredMouseWheelBehavior, VIEWER_WHEEL_BEHAVIOR_EVENT } from "../lib/ui-preferences";
 import type { GalleryDisplayMode, MouseWheelBehavior, ViewerDraftState, ViewerState } from "../ui-types";
-import "../gallery-stage2.css";
 import { BulkActionBar } from "./BulkActionBar";
 import { LibraryToolbar } from "./LibraryToolbar";
 import { GalleryGrid } from "./GalleryGrid";

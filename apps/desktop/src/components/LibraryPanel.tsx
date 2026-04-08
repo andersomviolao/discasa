@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
-import type { LibraryItem, SaveLibraryItemMediaEditInput } from "@discasa/shared";
+import type { DiscasaAttachmentRecoveryWarning, LibraryItem, SaveLibraryItemMediaEditInput } from "@discasa/shared";
 import {
   createViewerDraftStateFromItem,
   hasPendingViewerSave,
@@ -17,6 +17,7 @@ type LibraryPanelProps = {
   title: string;
   description: string;
   items: LibraryItem[];
+  attachmentWarnings: DiscasaAttachmentRecoveryWarning[];
   selectedItemIds: string[];
   isBusy: boolean;
   isDraggingFiles: boolean;
@@ -80,6 +81,7 @@ export function LibraryPanel({
   title,
   description,
   items,
+  attachmentWarnings,
   selectedItemIds,
   isBusy,
   isDraggingFiles,
@@ -112,6 +114,21 @@ export function LibraryPanel({
   const [viewerSaveNotice, setViewerSaveNotice] = useState("");
 
   const displayItems = items;
+
+  const attachmentWarningSummary = useMemo(() => {
+    if (attachmentWarnings.length === 0) {
+      return "";
+    }
+
+    const visibleNames = attachmentWarnings.slice(0, 3).map((warning) => warning.itemName);
+    const hiddenCount = attachmentWarnings.length - visibleNames.length;
+
+    if (hiddenCount > 0) {
+      return `${visibleNames.join(", ")} and ${hiddenCount} more.`;
+    }
+
+    return `${visibleNames.join(", ")}.`;
+  }, [attachmentWarnings]);
 
   const thumbnailZoomProgress = useMemo(() => {
     if (thumbnailZoomLevelCount <= 1) {
@@ -459,6 +476,16 @@ export function LibraryPanel({
           onRequestUpload={onRequestUpload}
         />
       </div>
+
+      {attachmentWarnings.length > 0 ? (
+        <div className="library-warning-banner" role="status" aria-live="polite">
+          <strong className="library-warning-title">Some indexed files could not be relinked to Discord.</strong>
+          <span className="library-warning-copy">
+            {attachmentWarnings.length} item(s) are still listed in the library index, but their live attachments were not found in the Discasa channels.
+          </span>
+          <span className="library-warning-copy compact">{attachmentWarningSummary}</span>
+        </div>
+      ) : null}
 
       <GalleryGrid
         items={displayItems}

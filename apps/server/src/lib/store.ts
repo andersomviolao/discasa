@@ -256,6 +256,10 @@ function normalizeSavedMediaEdit(raw: unknown): LibraryItemSavedMediaEdit | null
   };
 }
 
+function normalizeAttachmentStatus(raw: unknown): "ready" | "missing" {
+  return raw === "missing" ? "missing" : "ready";
+}
+
 function normalizeLibraryItemIndex(raw: unknown): PersistedItem | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -287,6 +291,7 @@ function normalizeLibraryItemIndex(raw: unknown): PersistedItem | null {
     guildId: entry.guildId,
     uploadedAt: entry.uploadedAt,
     attachmentUrl: entry.attachmentUrl,
+    attachmentStatus: normalizeAttachmentStatus(entry.attachmentStatus),
     isFavorite: entry.isFavorite,
     isTrashed: entry.isTrashed,
     storageChannelId: typeof entry.storageChannelId === "string" && entry.storageChannelId.length > 0 ? entry.storageChannelId : undefined,
@@ -329,6 +334,7 @@ function normalizeLegacyHydratedLibraryItem(raw: unknown): LibraryItem | null {
     albumIds: entry.albumIds.filter((value): value is string => typeof value === "string"),
     uploadedAt: entry.uploadedAt,
     attachmentUrl: entry.attachmentUrl,
+    attachmentStatus: normalizeAttachmentStatus(entry.attachmentStatus),
     isFavorite: entry.isFavorite,
     isTrashed: entry.isTrashed,
     storageChannelId: typeof entry.storageChannelId === "string" && entry.storageChannelId.length > 0 ? entry.storageChannelId : undefined,
@@ -340,7 +346,10 @@ function normalizeLegacyHydratedLibraryItem(raw: unknown): LibraryItem | null {
 
 function toIndexItemFromLegacyHydrated(item: LibraryItem): PersistedItem {
   const { albumIds: _albumIds, ...indexItem } = item;
-  return indexItem;
+  return {
+    ...indexItem,
+    attachmentStatus: normalizeAttachmentStatus(indexItem.attachmentStatus),
+  };
 }
 
 function normalizeItemIndexFromAnyRaw(raw: unknown): PersistedItem | null {
@@ -495,6 +504,7 @@ function createMembershipIndex(memberships: PersistedFolderMembership[]): Map<st
 function toHydratedLibraryItem(item: PersistedItem, membershipsByItemId: Map<string, string[]>): LibraryItem {
   return {
     ...item,
+    attachmentStatus: normalizeAttachmentStatus(item.attachmentStatus),
     albumIds: membershipsByItemId.get(item.id) ?? [],
   };
 }
@@ -526,6 +536,7 @@ function createStoredLibraryItem(file: UploadedFileRecord): PersistedItem {
     guildId: file.guildId,
     uploadedAt: new Date().toISOString(),
     attachmentUrl: file.attachmentUrl,
+    attachmentStatus: "ready",
     isFavorite: false,
     isTrashed: false,
     storageChannelId: file.storageChannelId,
@@ -615,7 +626,7 @@ export function createIndexSnapshot(): PersistedIndexSnapshot {
   return {
     version: 2,
     updatedAt: new Date().toISOString(),
-    items: database.items.map((item) => ({ ...item })),
+    items: database.items.map((item) => ({ ...item, attachmentStatus: normalizeAttachmentStatus(item.attachmentStatus) })),
   };
 }
 
@@ -816,6 +827,7 @@ export function updateLibraryItemStorage(
 
   item.guildId = nextStorage.guildId;
   item.attachmentUrl = nextStorage.attachmentUrl;
+  item.attachmentStatus = "ready";
   item.storageChannelId = nextStorage.storageChannelId;
   item.storageMessageId = nextStorage.storageMessageId;
 

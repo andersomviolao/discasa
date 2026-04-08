@@ -98,6 +98,25 @@ const editedBadgeStyle: CSSProperties = {
   pointerEvents: "none",
 };
 
+const missingBadgeStyle: CSSProperties = {
+  position: "absolute",
+  left: "10px",
+  top: "10px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minHeight: "22px",
+  padding: "0 8px",
+  borderRadius: "999px",
+  background: "rgba(123, 34, 41, 0.34)",
+  color: "rgba(255, 208, 210, 0.96)",
+  fontSize: "10px",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  pointerEvents: "none",
+};
+
 const bytesFormatter = new Intl.NumberFormat("en-US");
 
 function getFileExtension(fileName: string): string {
@@ -176,8 +195,9 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
 
   const extension = useMemo(() => getFileExtension(item.name), [item.name]);
   const fallbackLabel = useMemo(() => getFallbackLabel(item), [item]);
-  const canRenderImage = isImage(item) && !hasPreviewError;
-  const canRenderVideo = isVideo(item) && !hasPreviewError;
+  const attachmentUnavailable = item.attachmentStatus === "missing";
+  const canRenderImage = isImage(item) && !hasPreviewError && !attachmentUnavailable;
+  const canRenderVideo = isVideo(item) && !hasPreviewError && !attachmentUnavailable;
   const persistedMediaPresentation = useMemo(() => getPersistedMediaPresentation(item), [item]);
   const hasSavedEdit = Boolean(item.savedMediaEdit);
 
@@ -268,11 +288,12 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
         {!canRenderImage && !canRenderVideo ? (
           <div aria-hidden="true" style={previewFallbackStyle}>
             <span style={previewExtensionStyle}>{extension}</span>
-            <span style={previewCaptionStyle}>{fallbackLabel}</span>
+            <span style={previewCaptionStyle}>{attachmentUnavailable ? "Attachment unavailable" : fallbackLabel}</span>
           </div>
         ) : null}
 
-        {hasSavedEdit ? <span style={editedBadgeStyle}>Edited</span> : null}
+        {hasSavedEdit && !attachmentUnavailable ? <span style={editedBadgeStyle}>Edited</span> : null}
+        {attachmentUnavailable ? <span style={missingBadgeStyle}>Missing</span> : null}
         <div className="file-preview-actions">{actions}</div>
       </div>
     </div>

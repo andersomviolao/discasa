@@ -21,10 +21,21 @@ export type AppSession = {
   } | null;
 };
 
+export type DiscasaAttachmentRecoveryWarning = {
+  itemId: string;
+  itemName: string;
+  storageState: "drive" | "trash" | "unknown";
+  reason: string;
+};
+
 export type DiscasaInitializationResponse = {
   guildId: string;
   categoryName: string;
   channels: readonly string[] | string[];
+  recovery: {
+    relinkedItemCount: number;
+    unresolvedItems: DiscasaAttachmentRecoveryWarning[];
+  };
 };
 
 export type AlbumRecord = {
@@ -58,6 +69,8 @@ export type SaveLibraryItemMediaEditInput = {
   hasCrop: boolean;
 };
 
+export type LibraryItemAttachmentStatus = "ready" | "missing";
+
 export type LibraryItem = {
   id: string;
   name: string;
@@ -68,6 +81,7 @@ export type LibraryItem = {
   albumIds: string[];
   uploadedAt: string;
   attachmentUrl: string;
+  attachmentStatus?: LibraryItemAttachmentStatus;
   isFavorite: boolean;
   isTrashed: boolean;
   storageChannelId?: string;

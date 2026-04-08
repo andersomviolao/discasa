@@ -1,11 +1,13 @@
 import {
   DISCASA_CATEGORY_NAME,
   DISCASA_CHANNELS,
+  type DiscasaAttachmentRecoveryWarning,
   type DiscasaConfig,
   type FolderMembership,
   type FolderNode,
   type GuildSummary,
   type LibraryItem,
+  type LibraryItemIndex,
   type PersistedConfigSnapshot,
   type PersistedFolderSnapshot,
   type PersistedIndexSnapshot,
@@ -58,6 +60,23 @@ type DiscasaSetupStatus = {
   configMarkerPresent: boolean;
   isApplied: boolean;
   missingChannels: string[];
+};
+
+type StoredAttachmentPointer = {
+  channelId: string;
+  messageId: string;
+  attachmentUrl: string;
+};
+
+type AttachmentResolution = StoredAttachmentPointer & {
+  method: "message-reference" | "history-scan";
+};
+
+export type RefreshIndexSnapshotResult = {
+  snapshot: PersistedIndexSnapshot;
+  relinkedItemCount: number;
+  unresolvedItems: DiscasaAttachmentRecoveryWarning[];
+  didChange: boolean;
 };
 
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
@@ -281,9 +300,94 @@ async function sendBufferToChannel(
   };
 }
 
+function getAttachmentPointerFromMessage(
+  message: Message<boolean>,
+  preferredFileName?: string,
+): StoredAttachmentPointer | null {
+  const attachments = [...message.attachments.values()];
+  const attachment =
+    (preferredFileName ? attachments.find((entry) => entry.name === preferredFileName) : null) ??
+    attachments[0];
+
+  if (!attachment) {
+    return null;
+  }
+
+  return {
+    channelId: message.channelId,
+    messageId: message.id,
+    attachmentUrl: attachment.url,
+  };
+}
+
+async function fetchMessageAttachmentByReference(
+  channelId: string,
+  messageId: string,
+  preferredFileName?: string,
+): Promise<StoredAttachmentPointer | null> {
+  try {
+    const channel = await getGuildTextChannel(channelId);
+    const message = await channel.messages.fetch(messageId);
+    return getAttachmentPointerFromMessage(message, preferredFileName);
+  } catch {
+    return null;
+  }
+}
+
+async function findAttachmentInChannelHistory(
+  channelId: string,
+  options: {
+    preferredFileName: string;
+    currentAttachmentUrl?: string;
+    botUserId?: string | null;
+  },
+): Promise<StoredAttachmentPointer | null> {
+  const channel = await getGuildTextChannel(channelId);
+  let beforeMessageId: string | undefined;
+
+  while (true) {
+    const messages = await channel.messages.fetch(beforeMessageId ? { limit: 100, before: beforeMessageId } : { limit: 100 });
+
+    if (messages.size === 0) {
+      return null;
+    }
+
+    for (const message of messages.values()) {
+      if (options.botUserId && message.author.id !== options.botUserId) {
+        continue;
+      }
+
+      const matchingAttachment = [...message.attachments.values()].find((attachment) => {
+        const sameName = attachment.name === options.preferredFileName;
+        const sameUrl = Boolean(options.currentAttachmentUrl) && (
+          attachment.url === options.currentAttachmentUrl ||
+          attachment.proxyURL === options.currentAttachmentUrl
+        );
+
+        return sameName || sameUrl;
+      });
+
+      if (matchingAttachment) {
+        return {
+          channelId,
+          messageId: message.id,
+          attachmentUrl: matchingAttachment.url,
+        };
+      }
+    }
+
+    const oldestMessage = [...messages.values()].at(-1);
+    if (!oldestMessage || messages.size < 100) {
+      return null;
+    }
+
+    beforeMessageId = oldestMessage.id;
+  }
+}
+
 async function findMessageForItem(
   context: ActiveStorageContext,
-  item: LibraryItem,
+  item: Pick<LibraryItemIndex, "name" | "attachmentUrl" | "storageChannelId" | "isTrashed">,
 ): Promise<{ channelId: string; message: Message<boolean>; attachmentUrl: string } | null> {
   const client = await getBotClient();
   const botUserId = client?.user?.id ?? null;
@@ -295,26 +399,26 @@ async function findMessageForItem(
   ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
   for (const channelId of candidateChannelIds) {
-    const channel = await getGuildTextChannel(channelId);
-    const messages = await channel.messages.fetch({ limit: 100 });
+    const locatedAttachment = await findAttachmentInChannelHistory(channelId, {
+      preferredFileName: item.name,
+      currentAttachmentUrl: item.attachmentUrl,
+      botUserId,
+    });
 
-    for (const message of messages.values()) {
-      if (botUserId && message.author.id !== botUserId) {
-        continue;
-      }
+    if (!locatedAttachment) {
+      continue;
+    }
 
-      for (const attachment of message.attachments.values()) {
-        const sameUrl = attachment.url === item.attachmentUrl || attachment.proxyURL === item.attachmentUrl;
-        const sameName = attachment.name === item.name;
-
-        if (sameUrl || sameName) {
-          return {
-            channelId,
-            message,
-            attachmentUrl: attachment.url,
-          };
-        }
-      }
+    try {
+      const channel = await getGuildTextChannel(locatedAttachment.channelId);
+      const message = await channel.messages.fetch(locatedAttachment.messageId);
+      return {
+        channelId: locatedAttachment.channelId,
+        message,
+        attachmentUrl: locatedAttachment.attachmentUrl,
+      };
+    } catch {
+      // Continue with the next channel candidate.
     }
   }
 
@@ -326,11 +430,10 @@ async function resolveStoredMessage(
   item: LibraryItem,
 ): Promise<{ channelId: string; messageId: string; attachmentUrl: string }> {
   if (item.storageChannelId && item.storageMessageId) {
-    return {
-      channelId: item.storageChannelId,
-      messageId: item.storageMessageId,
-      attachmentUrl: item.attachmentUrl,
-    };
+    const directAttachment = await fetchMessageAttachmentByReference(item.storageChannelId, item.storageMessageId, item.name);
+    if (directAttachment) {
+      return directAttachment;
+    }
   }
 
   const located = await findMessageForItem(context, item);
@@ -442,7 +545,10 @@ function convertLegacyIndexToCurrent(raw: LegacyPersistedIndexSnapshot): Persist
     updatedAt: new Date().toISOString(),
     items: raw.items.map((item) => {
       const { albumIds: _albumIds, ...indexItem } = item;
-      return indexItem;
+      return {
+        ...indexItem,
+        attachmentStatus: item.attachmentStatus === "missing" ? "missing" : "ready",
+      };
     }),
   };
 }
@@ -508,6 +614,9 @@ async function readJsonSnapshot(channelId: string, fileNames: string[]): Promise
 
   const response = await fetch(found.attachmentUrl);
   if (!response.ok) {
+    console.warn(
+      `[Discasa snapshot] Failed to download ${found.fileName} from channel ${channelId}: ${response.status} ${response.statusText}.`,
+    );
     return null;
   }
 
@@ -517,10 +626,10 @@ async function readJsonSnapshot(channelId: string, fileNames: string[]): Promise
       fileName: found.fileName,
     };
   } catch {
+    console.warn(`[Discasa snapshot] Failed to parse ${found.fileName} from channel ${channelId}.`);
     return null;
   }
 }
-
 
 async function readInstallMarker(channelId: string): Promise<DiscasaInstallMarker | null> {
   const current = await readJsonSnapshot(channelId, [INSTALL_MARKER_FILENAME]);
@@ -654,6 +763,143 @@ async function writeSnapshotToChannel(
   }
 }
 
+function buildRelinkWarning(
+  item: Pick<LibraryItemIndex, "id" | "name" | "isTrashed">,
+  reason: string,
+): DiscasaAttachmentRecoveryWarning {
+  return {
+    itemId: item.id,
+    itemName: item.name,
+    storageState: item.isTrashed ? "trash" : "drive",
+    reason,
+  };
+}
+
+async function resolveCurrentAttachment(
+  context: ActiveStorageContext,
+  item: LibraryItemIndex,
+): Promise<AttachmentResolution | { reason: string }> {
+  if (item.storageChannelId && item.storageMessageId) {
+    const directAttachment = await fetchMessageAttachmentByReference(item.storageChannelId, item.storageMessageId, item.name);
+    if (directAttachment) {
+      return {
+        ...directAttachment,
+        method: "message-reference",
+      };
+    }
+  }
+
+  const fallbackMessage = await findMessageForItem(context, item);
+  if (fallbackMessage) {
+    return {
+      channelId: fallbackMessage.channelId,
+      messageId: fallbackMessage.message.id,
+      attachmentUrl: fallbackMessage.attachmentUrl,
+      method: "history-scan",
+    };
+  }
+
+  if (!item.storageChannelId || !item.storageMessageId) {
+    return {
+      reason: "Stored Discord message metadata is missing, and the file was not found by fallback history scan.",
+    };
+  }
+
+  return {
+    reason: "Stored Discord message could not be resolved, and the file was not found by fallback history scan.",
+  };
+}
+
+function didAttachmentPointerChange(item: LibraryItemIndex, resolved: StoredAttachmentPointer): boolean {
+  return (
+    item.attachmentUrl !== resolved.attachmentUrl ||
+    item.storageChannelId !== resolved.channelId ||
+    item.storageMessageId !== resolved.messageId ||
+    item.attachmentStatus === "missing"
+  );
+}
+
+export async function refreshIndexSnapshotAttachmentUrls(
+  context: ActiveStorageContext,
+  snapshot: PersistedIndexSnapshot,
+): Promise<RefreshIndexSnapshotResult> {
+  if (env.mockMode || snapshot.items.length === 0) {
+    return {
+      snapshot,
+      relinkedItemCount: 0,
+      unresolvedItems: [],
+      didChange: false,
+    };
+  }
+
+  console.info(
+    `[Discasa recovery] Starting attachment relink for ${snapshot.items.length} indexed item(s) in guild ${context.guildName} (${context.guildId}).`,
+  );
+
+  const nextItems: LibraryItemIndex[] = [];
+  const unresolvedItems: DiscasaAttachmentRecoveryWarning[] = [];
+  let relinkedItemCount = 0;
+  let didChange = false;
+
+  for (const item of snapshot.items) {
+    const resolution = await resolveCurrentAttachment(context, item);
+
+    if ("reason" in resolution) {
+      const warning = buildRelinkWarning(item, resolution.reason);
+      unresolvedItems.push(warning);
+
+      const nextItem: LibraryItemIndex = {
+        ...item,
+        attachmentStatus: "missing",
+      };
+
+      if (item.attachmentStatus !== "missing") {
+        didChange = true;
+      }
+
+      nextItems.push(nextItem);
+      console.warn(
+        `[Discasa recovery] Could not relink "${item.name}" (${item.id}). ${resolution.reason}`,
+      );
+      continue;
+    }
+
+    const nextItem: LibraryItemIndex = {
+      ...item,
+      guildId: context.guildId,
+      attachmentUrl: resolution.attachmentUrl,
+      attachmentStatus: "ready",
+      storageChannelId: resolution.channelId,
+      storageMessageId: resolution.messageId,
+    };
+
+    if (didAttachmentPointerChange(item, resolution)) {
+      relinkedItemCount += 1;
+      didChange = true;
+      console.info(
+        `[Discasa recovery] Relinked "${item.name}" (${item.id}) via ${resolution.method}.`,
+      );
+    }
+
+    nextItems.push(nextItem);
+  }
+
+  console.info(
+    `[Discasa recovery] Completed attachment relink. Refreshed ${relinkedItemCount} item(s); unresolved ${unresolvedItems.length}.`,
+  );
+
+  return {
+    snapshot: {
+      version: 2,
+      updatedAt: didChange ? new Date().toISOString() : snapshot.updatedAt,
+      items: nextItems,
+    },
+    relinkedItemCount,
+    unresolvedItems,
+    didChange,
+  };
+}
+
 export async function listEligibleGuilds(accessToken?: string): Promise<GuildSummary[]> {
   if (env.mockMode) {
     return [
@@ -688,7 +934,6 @@ export async function listEligibleGuilds(accessToken?: string): Promise<GuildSum
       permissions: getPermissionLabels(guild.permissions, guild.owner),
     }));
 }
-
 
 export async function inspectDiscasaSetup(guildId: string): Promise<DiscasaSetupStatus> {
   if (env.mockMode) {
@@ -918,6 +1163,9 @@ export async function readLatestIndexSnapshot(
     return convertLegacyIndexToCurrent(found.payload);
   }
 
+  console.warn(
+    `[Discasa snapshot] ${found.fileName} in channel ${context.indexChannelId} is not a valid Discasa index snapshot.`,
+  );
   return null;
 }
 
@@ -933,9 +1181,21 @@ export async function readLatestFolderSnapshot(
     return current.payload;
   }
 
+  if (current) {
+    console.warn(
+      `[Discasa snapshot] ${current.fileName} in channel ${context.folderChannelId} is not a valid Discasa folder snapshot.`,
+    );
+  }
+
   const legacy = await readJsonSnapshot(context.indexChannelId, [LEGACY_INDEX_SNAPSHOT_FILENAME]);
   if (legacy && isLegacyIndexSnapshot(legacy.payload)) {
     return deriveFolderSnapshotFromLegacyIndex(legacy.payload);
+  }
+
+  if (legacy) {
+    console.warn(
+      `[Discasa snapshot] ${legacy.fileName} in channel ${context.indexChannelId} is not a valid legacy Discasa index snapshot for folder recovery.`,
+    );
   }
 
   return null;
@@ -951,6 +1211,12 @@ export async function readLatestConfigSnapshot(
   const current = await readJsonSnapshot(context.configChannelId, [CONFIG_SNAPSHOT_FILENAME]);
   if (current && isConfigSnapshot(current.payload)) {
     return current.payload;
+  }
+
+  if (current) {
+    console.warn(
+      `[Discasa snapshot] ${current.fileName} in channel ${context.configChannelId} is not a valid Discasa config snapshot.`,
+    );
   }
 
   return null;

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import type { SaveLibraryItemMediaEditInput } from "@discasa/shared";
+import type { DiscasaAttachmentRecoveryWarning, SaveLibraryItemMediaEditInput } from "@discasa/shared";
 import { env } from "../lib/env";
 import { getDiscordUploadLimitForGuild, getUploadTooLargeMessage } from "../lib/discordUploadLimit";
 import {
@@ -44,6 +44,7 @@ import {
   readLatestConfigSnapshot,
   readLatestFolderSnapshot,
   readLatestIndexSnapshot,
+  refreshIndexSnapshotAttachmentUrls,
   restoreStoredItemFromTrash,
   syncConfigSnapshot,
   syncFolderSnapshot,
@@ -174,7 +175,7 @@ router.post("/discasa/initialize", async (request, response, next) => {
     const result = await initializeDiscasaInGuild(guildId, request.session.user?.id);
     setActiveStorageContext(result);
 
-    const [indexSnapshot, folderSnapshot, configSnapshot, hasCurrentIndex, hasCurrentFolder, hasCurrentConfig] = await Promise.all([
+    const [remoteIndexSnapshot, folderSnapshot, configSnapshot, hasCurrentIndex, hasCurrentFolder, hasCurrentConfig] = await Promise.all([
       readLatestIndexSnapshot(result),
       readLatestFolderSnapshot(result),
       readLatestConfigSnapshot(result),
@@ -183,8 +184,16 @@ router.post("/discasa/initialize", async (request, response, next) => {
       hasCurrentConfigSnapshot(result),
     ]);
 
-    if (indexSnapshot) {
-      replaceDatabaseFromIndexSnapshot(indexSnapshot);
+    let unresolvedItems: DiscasaAttachmentRecoveryWarning[] = [];
+    let relinkedItemCount = 0;
+    let indexDidChange = false;
+
+    if (remoteIndexSnapshot) {
+      const refreshedIndex = await refreshIndexSnapshotAttachmentUrls(result, remoteIndexSnapshot);
+      unresolvedItems = refreshedIndex.unresolvedItems;
+      relinkedItemCount = refreshedIndex.relinkedItemCount;
+      indexDidChange = refreshedIndex.didChange;
+      replaceDatabaseFromIndexSnapshot(refreshedIndex.snapshot);
     } else {
       replaceDatabaseFromIndexSnapshot({
         version: 2,
@@ -210,7 +219,7 @@ router.post("/discasa/initialize", async (request, response, next) => {
       resetDiscasaConfig();
     }
 
-    if (!hasCurrentIndex) {
+    if (!hasCurrentIndex || indexDidChange) {
       await syncRemoteIndexState();
     }
 
@@ -232,6 +241,10 @@ router.post("/discasa/initialize", async (request, response, next) => {
         result.trashChannelName,
         result.configChannelName,
       ],
+      recovery: {
+        relinkedItemCount,
+        unresolvedItems,
+      },
     });
   } catch (error) {
     next(error);

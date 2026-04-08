@@ -174,8 +174,9 @@ export function MediaViewerModal({
 }: MediaViewerModalProps) {
   const lastWheelNavigationAtRef = useRef(0);
   const isOpen = Boolean(item);
-  const imageMode = item ? isImage(item) : false;
-  const videoMode = item ? isVideo(item) : false;
+  const attachmentUnavailable = item?.attachmentStatus === "missing";
+  const imageMode = item ? isImage(item) && !attachmentUnavailable : false;
+  const videoMode = item ? isVideo(item) && !attachmentUnavailable : false;
   const hasSavedEdit = Boolean(item?.savedMediaEdit);
   const hasOriginalSource = Boolean(item?.originalSource);
   const savedAtLabel = formatSavedAt(item?.savedMediaEdit?.savedAt);
@@ -366,6 +367,7 @@ export function MediaViewerModal({
               <span className="media-viewer-counter">
                 {currentIndex + 1} / {totalItems}
               </span>
+              {attachmentUnavailable ? <span className="media-viewer-missing-chip">Attachment unavailable</span> : null}
               {hasSavedEdit ? <span className="media-viewer-edit-chip">Edited</span> : null}
               {hasOriginalSource ? <span className="media-viewer-original-chip">Original preserved</span> : null}
               {savedAtLabel ? <span className="media-viewer-saved-at">Saved {savedAtLabel}</span> : null}
@@ -424,6 +426,11 @@ export function MediaViewerModal({
                   {(item.name.split(".").pop() || "FILE").slice(0, 5).toUpperCase()}
                 </span>
                 <span className="media-viewer-file-name">{item.name}</span>
+                {attachmentUnavailable ? (
+                  <span className="media-viewer-file-warning">
+                    This file is still indexed, but the live Discord attachment could not be found.
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -530,7 +537,7 @@ export function MediaViewerModal({
             </div>
           ) : (
             <div className="media-viewer-info-chip">
-              {videoMode ? "Video preview" : "File preview"}
+              {attachmentUnavailable ? "Attachment unavailable" : videoMode ? "Video preview" : "File preview"}
             </div>
           )}
 
@@ -546,7 +553,7 @@ export function MediaViewerModal({
               {hasSavedEdit ? <span>O Original</span> : null}
             </div>
             <div className="media-viewer-zoom-readout" aria-live="polite">
-              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : "Preview"}
+              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : attachmentUnavailable ? "Attachment unavailable" : "Preview"}
             </div>
           </div>
         </footer>

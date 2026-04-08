@@ -5,6 +5,7 @@ import {
   DISCASA_DEFAULT_CONFIG,
   type AlbumRecord,
   type AppSession,
+  type DiscasaAttachmentRecoveryWarning,
   type DiscasaConfig,
   type GuildSummary,
   type LibraryItem,
@@ -140,6 +141,7 @@ export function App() {
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteFileError, setDeleteFileError] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [attachmentWarnings, setAttachmentWarnings] = useState<DiscasaAttachmentRecoveryWarning[]>([]);
   const [thumbnailZoomIndex, setThumbnailZoomIndex] = useState<number>(() => {
     const storedPercent = readStoredNumber(THUMBNAIL_ZOOM_KEY, DEFAULT_THUMBNAIL_ZOOM_PERCENT);
     return getClosestThumbnailZoomIndex(storedPercent);
@@ -503,6 +505,10 @@ export function App() {
       setActiveGuildName(session.activeGuild?.name ?? null);
       setAlbums(nextAlbums);
       setItems(nextItems);
+
+      if (!session.authenticated || !session.activeGuild) {
+        setAttachmentWarnings([]);
+      }
 
       try {
         await loadRemoteConfig();
@@ -872,13 +878,20 @@ export function App() {
     try {
       setIsApplyingGuild(true);
       setAuthSetupError("");
-      await initializeDiscasa(guildIdToApply);
+      const initialization = await initializeDiscasa(guildIdToApply);
       setSelectedGuildId(guildIdToApply);
       setActiveGuildId(guildIdToApply);
       setActiveGuildName(nextGuildName);
-      setMessage(successMessage ?? `Discasa applied to ${nextGuildName}.`);
-      setError("");
       await bootstrap();
+      setAttachmentWarnings(initialization.recovery.unresolvedItems);
+
+      const messageParts = [successMessage ?? `Discasa applied to ${nextGuildName}.`];
+      if (initialization.recovery.relinkedItemCount > 0) {
+        messageParts.push(`${initialization.recovery.relinkedItemCount} file link(s) refreshed.`);
+      }
+
+      setMessage(messageParts.join(" "));
+      setError("");
       setAuthSetupStep(null);
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not apply the selected server.";
@@ -893,6 +906,7 @@ export function App() {
     setAuthSetupError("");
     setIsCheckingSetup(false);
     setHasOpenedBotInvite(false);
+    setAttachmentWarnings([]);
     setAuthSetupStep("waiting");
 
     try {
@@ -1237,6 +1251,7 @@ export function App() {
             title={currentTitle}
             description={currentDescription}
             items={visibleItems}
+            attachmentWarnings={attachmentWarnings}
             selectedItemIds={selectedItemIds}
             isBusy={isBusy}
             isDraggingFiles={isDraggingFiles}

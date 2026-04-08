@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "migrate:legacy-media-edits": "tsx scripts/migrate-legacy-media-edits.ts"
   },
   "dependencies": {
     "@discasa/shared": "0.0.0",

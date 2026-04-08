@@ -137,6 +137,24 @@ function normalizeDraftState(nextState: Omit<ViewerDraftState, "canUndo">): View
   };
 }
 
+const savedAtFormatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function formatSavedAt(savedAt: string | undefined): string {
+  if (!savedAt) {
+    return "";
+  }
+
+  const parsed = new Date(savedAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  return savedAtFormatter.format(parsed);
+}
+
 export function MediaViewerModal({
   item,
   currentIndex,
@@ -160,39 +178,7 @@ export function MediaViewerModal({
   const videoMode = item ? isVideo(item) : false;
   const hasSavedEdit = Boolean(item?.savedMediaEdit);
   const hasOriginalSource = Boolean(item?.originalSource);
-
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
-        return;
-      }
-
-      if (event.key === "ArrowLeft") {
-        onPrevious();
-        return;
-      }
-
-      if (event.key === "ArrowRight") {
-        onNext();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose, onNext, onPrevious]);
-
-  const canGoPrevious = currentIndex > 0;
-  const canGoNext = currentIndex >= 0 && currentIndex < totalItems - 1;
-
-  const mediaTransform = useMemo(
-    () => `translate(-50%, -50%) scale(${draftState.zoomLevel}) rotate(${draftState.rotationDegrees}deg)`,
-    [draftState.rotationDegrees, draftState.zoomLevel],
-  );
+  const savedAtLabel = formatSavedAt(item?.savedMediaEdit?.savedAt);
 
   function updateDraftState(patch: Partial<Omit<ViewerDraftState, "canUndo">>): void {
     onDraftStateChange(
@@ -204,6 +190,26 @@ export function MediaViewerModal({
     );
   }
 
+  function zoomOut(): void {
+    updateDraftState({ zoomLevel: draftState.zoomLevel - 0.2 });
+  }
+
+  function zoomIn(): void {
+    updateDraftState({ zoomLevel: draftState.zoomLevel + 0.2 });
+  }
+
+  function rotateLeft(): void {
+    updateDraftState({ rotationDegrees: draftState.rotationDegrees - 90 });
+  }
+
+  function rotateRight(): void {
+    updateDraftState({ rotationDegrees: draftState.rotationDegrees + 90 });
+  }
+
+  function toggleCrop(): void {
+    updateDraftState({ hasCrop: !draftState.hasCrop });
+  }
+
   function resetDraftState(): void {
     onDraftStateChange(
       normalizeDraftState({
@@ -213,6 +219,110 @@ export function MediaViewerModal({
       }),
     );
   }
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        onPrevious();
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        onNext();
+        return;
+      }
+
+      if (!imageMode) {
+        return;
+      }
+
+      const normalizedKey = event.key.toLowerCase();
+
+      if (normalizedKey === "+" || normalizedKey === "=") {
+        event.preventDefault();
+        zoomIn();
+        return;
+      }
+
+      if (normalizedKey === "-" || normalizedKey === "_") {
+        event.preventDefault();
+        zoomOut();
+        return;
+      }
+
+      if (normalizedKey === "q") {
+        event.preventDefault();
+        rotateLeft();
+        return;
+      }
+
+      if (normalizedKey === "e") {
+        event.preventDefault();
+        rotateRight();
+        return;
+      }
+
+      if (normalizedKey === "c") {
+        event.preventDefault();
+        toggleCrop();
+        return;
+      }
+
+      if (normalizedKey === "0") {
+        event.preventDefault();
+        resetDraftState();
+        return;
+      }
+
+      if (normalizedKey === "s" && hasPendingSave && !isSaving) {
+        event.preventDefault();
+        onSave();
+        return;
+      }
+
+      if (normalizedKey === "o" && hasSavedEdit && !isSaving) {
+        event.preventDefault();
+        onRestoreOriginal();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    draftState.hasCrop,
+    draftState.rotationDegrees,
+    draftState.zoomLevel,
+    hasPendingSave,
+    hasSavedEdit,
+    imageMode,
+    isOpen,
+    isSaving,
+    onClose,
+    onNext,
+    onPrevious,
+    onRestoreOriginal,
+    onSave,
+  ]);
+
+  const canGoPrevious = currentIndex > 0;
+  const canGoNext = currentIndex >= 0 && currentIndex < totalItems - 1;
+
+  const mediaTransform = useMemo(
+    () => `translate(-50%, -50%) scale(${draftState.zoomLevel}) rotate(${draftState.rotationDegrees}deg)`,
+    [draftState.rotationDegrees, draftState.zoomLevel],
+  );
 
   function handleWheel(event: WheelEvent<HTMLDivElement>): void {
     if (!imageMode) {
@@ -258,6 +368,7 @@ export function MediaViewerModal({
               </span>
               {hasSavedEdit ? <span className="media-viewer-edit-chip">Edited</span> : null}
               {hasOriginalSource ? <span className="media-viewer-original-chip">Original preserved</span> : null}
+              {savedAtLabel ? <span className="media-viewer-saved-at">Saved {savedAtLabel}</span> : null}
             </div>
           </div>
 
@@ -335,7 +446,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => updateDraftState({ zoomLevel: draftState.zoomLevel - 0.2 })}
+                onClick={zoomOut}
                 disabled={draftState.zoomLevel <= 1}
                 title="Zoom out"
               >
@@ -346,7 +457,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => updateDraftState({ zoomLevel: draftState.zoomLevel + 0.2 })}
+                onClick={zoomIn}
                 disabled={draftState.zoomLevel >= 5}
                 title="Zoom in"
               >
@@ -357,7 +468,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => updateDraftState({ rotationDegrees: draftState.rotationDegrees - 90 })}
+                onClick={rotateLeft}
                 title="Rotate left"
               >
                 <span className="media-viewer-control-icon"><RotateLeftIcon /></span>
@@ -367,7 +478,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className="media-viewer-control-button"
-                onClick={() => updateDraftState({ rotationDegrees: draftState.rotationDegrees + 90 })}
+                onClick={rotateRight}
                 title="Rotate right"
               >
                 <span className="media-viewer-control-icon"><RotateRightIcon /></span>
@@ -377,7 +488,7 @@ export function MediaViewerModal({
               <button
                 type="button"
                 className={`media-viewer-control-button ${draftState.hasCrop ? "active" : ""}`}
-                onClick={() => updateDraftState({ hasCrop: !draftState.hasCrop })}
+                onClick={toggleCrop}
                 title={draftState.hasCrop ? "Disable crop preview" : "Enable crop preview"}
               >
                 <span className="media-viewer-control-icon"><CropIcon /></span>
@@ -426,6 +537,14 @@ export function MediaViewerModal({
           <div className="media-viewer-footer-meta">
             {saveError ? <span className="media-viewer-save-status error">{saveError}</span> : null}
             {!saveError && saveNotice ? <span className="media-viewer-save-status success">{saveNotice}</span> : null}
+            <div className="media-viewer-shortcuts-hint">
+              <span>Esc Close</span>
+              <span>←/→ Navigate</span>
+              {imageMode ? <span>Q/E Rotate</span> : null}
+              {imageMode ? <span>C Crop</span> : null}
+              {imageMode ? <span>S Save</span> : null}
+              {hasSavedEdit ? <span>O Original</span> : null}
+            </div>
             <div className="media-viewer-zoom-readout" aria-live="polite">
               {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : "Preview"}
             </div>

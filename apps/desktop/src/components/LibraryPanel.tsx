@@ -8,6 +8,7 @@ import {
 } from "../lib/media-edits";
 import type { GalleryDisplayMode, MouseWheelBehavior, ViewerDraftState, ViewerState } from "../ui-types";
 import "../gallery-stage2.css";
+import "../gallery-stage8.css";
 import { BulkActionBar } from "./BulkActionBar";
 import { LibraryToolbar } from "./LibraryToolbar";
 import { GalleryGrid } from "./GalleryGrid";
@@ -163,7 +164,6 @@ export function LibraryPanel({
 
   const activeViewerItem = activeViewerIndex >= 0 ? displayItems[activeViewerIndex] ?? null : null;
   const viewerHasPendingSave = hasPendingViewerSave(activeViewerItem, viewerDraftState);
-  const viewerHasSavedEdit = Boolean(activeViewerItem?.savedMediaEdit);
 
   useEffect(() => {
     const handleViewerWheelBehaviorChange = (event: Event) => {
@@ -178,6 +178,30 @@ export function LibraryPanel({
     window.addEventListener(VIEWER_WHEEL_BEHAVIOR_EVENT, handleViewerWheelBehaviorChange as EventListener);
     return () => window.removeEventListener(VIEWER_WHEEL_BEHAVIOR_EVENT, handleViewerWheelBehaviorChange as EventListener);
   }, []);
+
+  useEffect(() => {
+    if (!viewerSaveNotice) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setViewerSaveNotice("");
+    }, 2600);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [viewerSaveNotice]);
+
+  useEffect(() => {
+    if (!viewerSaveError) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setViewerSaveError("");
+    }, 4200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [viewerSaveError]);
 
   useEffect(() => {
     if (!viewerState) {
@@ -317,6 +341,7 @@ export function LibraryPanel({
           originalSource: response.item.originalSource ?? null,
         },
       }));
+      setViewerDraftState(createViewerDraftStateFromItem(response.item));
       setViewerSaveNotice(response.item.savedMediaEdit ? "Edits saved for this image." : "Image restored to the original view.");
     } catch (caughtError) {
       setViewerSaveError(caughtError instanceof Error ? caughtError.message : "Could not save the image edits.");
@@ -326,7 +351,7 @@ export function LibraryPanel({
   }
 
   async function handleRestoreViewerOriginal(): Promise<void> {
-    if (!activeViewerItem || !activeViewerItem.mimeType.startsWith("image/") || isSavingViewerEdit || !viewerHasSavedEdit) {
+    if (!activeViewerItem || !activeViewerItem.mimeType.startsWith("image/") || isSavingViewerEdit || !activeViewerItem.savedMediaEdit) {
       return;
     }
 
@@ -343,13 +368,7 @@ export function LibraryPanel({
           originalSource: response.item.originalSource ?? null,
         },
       }));
-      setViewerDraftState(
-        createViewerDraftStateFromItem({
-          ...activeViewerItem,
-          savedMediaEdit: null,
-          originalSource: null,
-        }),
-      );
+      setViewerDraftState(createViewerDraftStateFromItem(response.item));
       setViewerSaveNotice("Original restored for this image.");
     } catch (caughtError) {
       setViewerSaveError(caughtError instanceof Error ? caughtError.message : "Could not restore the original image.");

@@ -1,5 +1,7 @@
-import { useMemo, type DragEvent } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import type { LibraryItem } from "@discasa/shared";
+import type { GalleryDisplayMode } from "../ui-types";
+import "../gallery-stage2.css";
 import { LibraryToolbar } from "./LibraryToolbar";
 import { GalleryGrid } from "./GalleryGrid";
 import { stopActionEvent } from "./GalleryItem";
@@ -90,6 +92,8 @@ export function LibraryPanel({
   onRestoreFromTrash,
   onDeleteItem,
 }: LibraryPanelProps) {
+  const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>("free");
+
   const thumbnailZoomProgress = useMemo(() => {
     if (thumbnailZoomLevelCount <= 1) {
       return 0;
@@ -155,8 +159,8 @@ export function LibraryPanel({
             stopActionEvent(event);
             void onMoveToTrash(item.id);
           }}
-          aria-label="Trash"
-          title="Trash"
+          aria-label="Move to trash"
+          title="Move to trash"
         >
           <TrashIcon />
         </button>
@@ -181,11 +185,15 @@ export function LibraryPanel({
         </div>
 
         <LibraryToolbar
+          galleryDisplayMode={galleryDisplayMode}
           thumbnailZoomIndex={thumbnailZoomIndex}
           thumbnailZoomLevelCount={thumbnailZoomLevelCount}
           thumbnailZoomPercent={thumbnailZoomPercent}
           thumbnailZoomProgress={thumbnailZoomProgress}
           onThumbnailZoomIndexChange={onThumbnailZoomIndexChange}
+          onToggleGalleryDisplayMode={() => {
+            setGalleryDisplayMode((current) => (current === "free" ? "square" : "free"));
+          }}
           onRequestUpload={onRequestUpload}
         />
       </div>
@@ -193,6 +201,7 @@ export function LibraryPanel({
       <GalleryGrid
         items={items}
         isBusy={isBusy}
+        displayMode={galleryDisplayMode}
         thumbnailSize={thumbnailSize}
         selectedItemIds={selectedItemIds}
         onSelectItem={onSelectItem}

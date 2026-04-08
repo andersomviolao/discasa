@@ -1,10 +1,20 @@
-import { useMemo, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import type { LibraryItem } from "@discasa/shared";
-import { getFileTypeLabel, isImage, isVideo } from "../lib/library-helpers";
+import type { GalleryDisplayMode } from "../ui-types";
+import { isImage, isVideo } from "../lib/library-helpers";
 
 type GalleryItemProps = {
   item: LibraryItem;
   isSelected: boolean;
+  displayMode: GalleryDisplayMode;
   actions: ReactNode;
   onClick: (event: ReactMouseEvent<HTMLElement>, itemId: string) => void;
   onRegisterElement: (itemId: string, element: HTMLElement | null) => void;
@@ -14,7 +24,6 @@ const previewMediaStyle: CSSProperties = {
   width: "100%",
   height: "100%",
   display: "block",
-  objectFit: "cover",
   background: "rgba(3, 10, 22, 0.88)",
 };
 
@@ -22,7 +31,7 @@ const previewShadeStyle: CSSProperties = {
   position: "absolute",
   inset: 0,
   pointerEvents: "none",
-  background: "linear-gradient(180deg, rgba(5, 10, 18, 0.12) 0%, rgba(5, 10, 18, 0.02) 38%, rgba(5, 10, 18, 0.30) 100%)",
+  background: "linear-gradient(180deg, rgba(5, 10, 18, 0.02) 0%, rgba(5, 10, 18, 0.01) 45%, rgba(5, 10, 18, 0.22) 100%)",
 };
 
 const previewFallbackStyle: CSSProperties = {
@@ -35,19 +44,19 @@ const previewFallbackStyle: CSSProperties = {
   gap: "10px",
   padding: "18px",
   textAlign: "center",
-  background: "radial-gradient(circle at top, rgba(233, 136, 29, 0.18) 0%, rgba(8, 14, 24, 0.88) 44%, rgba(4, 8, 15, 0.98) 100%)",
+  background: "radial-gradient(circle at top, rgba(233, 136, 29, 0.14) 0%, rgba(8, 14, 24, 0.78) 44%, rgba(4, 8, 15, 0.96) 100%)",
 };
 
 const previewExtensionStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  minWidth: "74px",
-  minHeight: "74px",
+  minWidth: "70px",
+  minHeight: "70px",
   padding: "12px",
   borderRadius: "18px",
   border: "1px solid rgba(255, 255, 255, 0.12)",
-  background: "rgba(255, 255, 255, 0.08)",
+  background: "rgba(255, 255, 255, 0.06)",
   color: "rgba(255, 255, 255, 0.94)",
   fontSize: "18px",
   fontWeight: 600,
@@ -59,7 +68,7 @@ const previewExtensionStyle: CSSProperties = {
 const previewCaptionStyle: CSSProperties = {
   display: "block",
   maxWidth: "100%",
-  color: "rgba(255, 255, 255, 0.64)",
+  color: "rgba(255, 255, 255, 0.58)",
   fontSize: "11px",
   letterSpacing: "0.08em",
   textTransform: "uppercase",
@@ -67,24 +76,6 @@ const previewCaptionStyle: CSSProperties = {
   overflow: "hidden",
   textOverflow: "ellipsis",
 };
-
-const previewVideoBadgeStyle: CSSProperties = {
-  position: "absolute",
-  right: "10px",
-  bottom: "10px",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  minHeight: "20px",
-  padding: "0 8px",
-  borderRadius: "999px",
-  background: "rgba(8, 14, 24, 0.76)",
-  color: "rgba(255, 255, 255, 0.82)",
-  fontSize: "10px",
-  fontWeight: 600,
-  letterSpacing: "0.08em",
-};
-
 
 const bytesFormatter = new Intl.NumberFormat("en-US");
 
@@ -124,21 +115,86 @@ function getFallbackLabel(item: LibraryItem): string {
   return item.mimeType.split("/")[0]?.toUpperCase() || "FILE";
 }
 
+function formatVideoDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "0:00";
+  }
+
+  const totalSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function resolveFallbackAspectRatio(item: LibraryItem): number {
+  if (isVideo(item)) {
+    return 16 / 9;
+  }
+
+  if (isImage(item)) {
+    return 4 / 3;
+  }
+
+  return 1;
+}
+
 function stopActionEvent(event: ReactMouseEvent<HTMLButtonElement> | ReactPointerEvent<HTMLButtonElement>): void {
   event.stopPropagation();
 }
 
-function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNode }) {
+function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; displayMode: GalleryDisplayMode; actions: ReactNode }) {
   const [hasPreviewError, setHasPreviewError] = useState(false);
+  const [mediaAspectRatio, setMediaAspectRatio] = useState<number | null>(null);
+  const [videoDuration, setVideoDuration] = useState<string>("");
 
   const extension = useMemo(() => getFileExtension(item.name), [item.name]);
   const fallbackLabel = useMemo(() => getFallbackLabel(item), [item]);
   const canRenderImage = isImage(item) && !hasPreviewError;
   const canRenderVideo = isVideo(item) && !hasPreviewError;
 
+  useEffect(() => {
+    if (!canRenderImage || displayMode !== "free") {
+      return;
+    }
+
+    let isDisposed = false;
+    const image = new Image();
+
+    image.onload = () => {
+      if (isDisposed || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        return;
+      }
+
+      setMediaAspectRatio(image.naturalWidth / image.naturalHeight);
+    };
+
+    image.onerror = () => {
+      if (!isDisposed) {
+        setMediaAspectRatio(null);
+      }
+    };
+
+    image.src = item.attachmentUrl;
+
+    return () => {
+      isDisposed = true;
+    };
+  }, [canRenderImage, displayMode, item.attachmentUrl]);
+
+  const previewAspectRatio =
+    displayMode === "square"
+      ? 1
+      : mediaAspectRatio ?? resolveFallbackAspectRatio(item);
+
   return (
     <div className="file-card" title={item.name}>
-      <div className="file-preview">
+      <div className="file-preview" style={{ aspectRatio: `${previewAspectRatio}` }}>
         {canRenderImage ? (
           <>
             <img
@@ -146,7 +202,10 @@ function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNod
               alt={item.name}
               loading="lazy"
               draggable={false}
-              style={previewMediaStyle}
+              style={{
+                ...previewMediaStyle,
+                objectFit: displayMode === "square" ? "cover" : "contain",
+              }}
               onError={() => setHasPreviewError(true)}
             />
             <div aria-hidden="true" style={previewShadeStyle} />
@@ -162,12 +221,22 @@ function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNod
               playsInline
               disablePictureInPicture
               controls={false}
-              style={previewMediaStyle}
+              style={{
+                ...previewMediaStyle,
+                objectFit: displayMode === "square" ? "cover" : "contain",
+              }}
+              onLoadedMetadata={(event) => {
+                const target = event.currentTarget;
+                if (displayMode === "free" && target.videoWidth > 0 && target.videoHeight > 0) {
+                  setMediaAspectRatio(target.videoWidth / target.videoHeight);
+                }
+                setVideoDuration(formatVideoDuration(target.duration));
+              }}
               onError={() => setHasPreviewError(true)}
             />
             <div aria-hidden="true" style={previewShadeStyle} />
-            <span aria-hidden="true" style={previewVideoBadgeStyle}>
-              Preview
+            <span className="file-video-duration" aria-label={`Video duration ${videoDuration || "0:00"}`}>
+              {videoDuration || "0:00"}
             </span>
           </>
         ) : null}
@@ -179,23 +248,22 @@ function FileThumbnail({ item, actions }: { item: LibraryItem; actions: ReactNod
           </div>
         ) : null}
 
-        <span className="file-type-chip">{getFileTypeLabel(item)}</span>
         <div className="file-preview-actions">{actions}</div>
       </div>
     </div>
   );
 }
 
-export function GalleryItem({ item, isSelected, actions, onClick, onRegisterElement }: GalleryItemProps) {
+export function GalleryItem({ item, isSelected, displayMode, actions, onClick, onRegisterElement }: GalleryItemProps) {
   return (
     <article
       ref={(element) => onRegisterElement(item.id, element)}
-      className={`file-tile ${isSelected ? "selected" : ""}`}
+      className={`file-tile mode-${displayMode} ${isSelected ? "selected" : ""}`}
       title={item.name}
       onClick={(event) => onClick(event, item.id)}
     >
-      <FileThumbnail item={item} actions={actions} />
-      <div className="file-meta">
+      <FileThumbnail item={item} displayMode={displayMode} actions={actions} />
+      <div className="file-meta compact">
         <span className="file-name">{item.name}</span>
         <small className="file-size">{bytesFormatter.format(item.size)} bytes</small>
       </div>

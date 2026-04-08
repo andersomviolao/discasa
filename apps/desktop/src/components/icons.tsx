@@ -108,3 +108,32 @@ export function UploadIcon() {
     </svg>
   );
 }
+
+export function ZoomIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="4.75" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M15 15 19 19" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M10.5 8.1v4.8M8.1 10.5h4.8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function GalleryModeIcon({ mode }: { mode: "free" | "square" }) {
+  if (mode === "square") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="5.5" y="5.5" width="13" height="13" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+        <path d="M12 5.5v13M5.5 12h13" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="4.75" y="6.25" width="14.5" height="11.5" rx="2.25" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M8 14.75 11.2 11l2.4 2.2 2.4-2.7" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="9.1" cy="9.7" r="1.05" fill="currentColor" />
+    </svg>
+  );
+}

@@ -1,5 +1,6 @@
 import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import type { LibraryItem } from "@discasa/shared";
+import type { GalleryDisplayMode } from "../ui-types";
 import { GalleryItem } from "./GalleryItem";
 
 type SelectionBox = {
@@ -21,6 +22,7 @@ type SelectionSession = {
 type GalleryGridProps = {
   items: LibraryItem[];
   isBusy: boolean;
+  displayMode: GalleryDisplayMode;
   thumbnailSize: number;
   selectedItemIds: string[];
   onSelectItem: (itemId: string, options: { range: boolean; toggle: boolean }) => void;
@@ -53,6 +55,7 @@ function createViewportSelectionRect(startClientX: number, startClientY: number,
 export function GalleryGrid({
   items,
   isBusy,
+  displayMode,
   thumbnailSize,
   selectedItemIds,
   onSelectItem,
@@ -189,7 +192,7 @@ export function GalleryGrid({
   return (
     <div
       ref={gridRef}
-      className={`files-grid scrollable-y subtle-scrollbar content-scrollbar-host ${selectionBox ? "selecting" : ""}`}
+      className={`files-grid display-${displayMode} scrollable-y subtle-scrollbar content-scrollbar-host ${selectionBox ? "selecting" : ""}`}
       style={{ "--file-card-width": `${thumbnailSize}px` } as CSSProperties}
       onPointerDown={handleGridPointerDown}
     >
@@ -198,6 +201,7 @@ export function GalleryGrid({
           key={item.id}
           item={item}
           isSelected={selectedItemIdSet.has(item.id)}
+          displayMode={displayMode}
           actions={renderItemActions(item)}
           onClick={handleItemClick}
           onRegisterElement={setItemElement}

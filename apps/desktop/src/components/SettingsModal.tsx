@@ -7,9 +7,10 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { GuildSummary } from "@discasa/shared";
-import type { MouseWheelBehavior, SettingsSection } from "../ui-types";
+import type { SettingsSection } from "../ui-types";
 import { logoutDiscord } from "../lib/api";
+import { type HsvColor, clampNumber, hexToHsv, hsvToHex, normalizeHexColor } from "../lib/color";
+import { commitMouseWheelBehavior, readStoredMouseWheelBehavior } from "../lib/ui-preferences";
 import { BaseModal } from "./BaseModal";
 import { ProfileAvatar } from "./ProfileAvatar";
 
@@ -21,33 +22,15 @@ type SettingsModalProps = {
   };
   settingsSection: SettingsSection;
   sessionName: string | null;
-  guilds: GuildSummary[];
-  selectedGuildId: string;
   activeGuildName: string | null;
-  isLoadingGuilds: boolean;
-  isApplyingGuild: boolean;
-  discordSettingsError: string;
   minimizeToTray: boolean;
   closeToTray: boolean;
   accentColor: string;
-  accentInput: string;
-  accentInputError: string;
   onClose: () => void;
   onSelectSection: (section: SettingsSection) => void;
-  onOpenDiscordLogin: () => void;
-  onOpenDiscordBotInstall: () => void;
-  onSelectGuild: (guildId: string) => void;
-  onApplyGuild: () => void;
   onChangeMinimizeToTray: (checked: boolean) => void;
   onChangeCloseToTray: (checked: boolean) => void;
-  onAccentInputChange: (value: string) => void;
-  onAccentInputBlur: () => void;
-};
-
-type HsvColor = {
-  hue: number;
-  saturation: number;
-  value: number;
+  onCommitAccentColor: (value: string) => void;
 };
 
 const settingsSections: Array<{ id: SettingsSection; label: string }> = [
@@ -56,160 +39,12 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "window", label: "Window" },
 ];
 
-const VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY = "discasa.viewer.mouseWheelBehavior";
-const VIEWER_WHEEL_BEHAVIOR_EVENT = "discasa:viewer-wheel-behavior";
-
-function readStoredMouseWheelBehavior(): MouseWheelBehavior {
-  if (typeof window === "undefined") {
-    return "zoom";
-  }
-
-  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
-  return raw === "navigate" ? "navigate" : "zoom";
-}
-
-function commitMouseWheelBehavior(nextValue: MouseWheelBehavior): void {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY, nextValue);
-  window.dispatchEvent(new CustomEvent<MouseWheelBehavior>(VIEWER_WHEEL_BEHAVIOR_EVENT, { detail: nextValue }));
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function normalizeHexColor(value: string): string | null {
-  const raw = value.trim().replace(/^#/, "");
-
-  if (/^[0-9a-fA-F]{3}$/.test(raw)) {
-    const expanded = raw
-      .split("")
-      .map((character) => `${character}${character}`)
-      .join("");
-
-    return `#${expanded.toUpperCase()}`;
-  }
-
-  if (/^[0-9a-fA-F]{6}$/.test(raw)) {
-    return `#${raw.toUpperCase()}`;
-  }
-
-  return null;
-}
-
-function hexToRgb(hex: string): { red: number; green: number; blue: number } {
-  const normalized = normalizeHexColor(hex) ?? "#E9881D";
-  const value = normalized.slice(1);
-
-  return {
-    red: Number.parseInt(value.slice(0, 2), 16),
-    green: Number.parseInt(value.slice(2, 4), 16),
-    blue: Number.parseInt(value.slice(4, 6), 16),
-  };
-}
-
-function rgbToHex(red: number, green: number, blue: number): string {
-  return `#${[red, green, blue]
-    .map((channel) => clampNumber(Math.round(channel), 0, 255).toString(16).padStart(2, "0"))
-    .join("")
-    .toUpperCase()}`;
-}
-
-function rgbToHsv(red: number, green: number, blue: number): HsvColor {
-  const normalizedRed = red / 255;
-  const normalizedGreen = green / 255;
-  const normalizedBlue = blue / 255;
-
-  const max = Math.max(normalizedRed, normalizedGreen, normalizedBlue);
-  const min = Math.min(normalizedRed, normalizedGreen, normalizedBlue);
-  const delta = max - min;
-
-  let hue = 0;
-
-  if (delta !== 0) {
-    if (max === normalizedRed) {
-      hue = ((normalizedGreen - normalizedBlue) / delta) % 6;
-    } else if (max === normalizedGreen) {
-      hue = (normalizedBlue - normalizedRed) / delta + 2;
-    } else {
-      hue = (normalizedRed - normalizedGreen) / delta + 4;
-    }
-  }
-
-  hue = Math.round(hue * 60);
-  if (hue < 0) {
-    hue += 360;
-  }
-
-  const saturation = max === 0 ? 0 : delta / max;
-  const value = max;
-
-  return {
-    hue,
-    saturation,
-    value,
-  };
-}
-
-function hsvToRgb(hue: number, saturation: number, value: number): { red: number; green: number; blue: number } {
-  const normalizedHue = ((hue % 360) + 360) % 360;
-  const chroma = value * saturation;
-  const huePrime = normalizedHue / 60;
-  const x = chroma * (1 - Math.abs((huePrime % 2) - 1));
-
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-
-  if (huePrime >= 0 && huePrime < 1) {
-    red = chroma;
-    green = x;
-  } else if (huePrime >= 1 && huePrime < 2) {
-    red = x;
-    green = chroma;
-  } else if (huePrime >= 2 && huePrime < 3) {
-    green = chroma;
-    blue = x;
-  } else if (huePrime >= 3 && huePrime < 4) {
-    green = x;
-    blue = chroma;
-  } else if (huePrime >= 4 && huePrime < 5) {
-    red = x;
-    blue = chroma;
-  } else {
-    red = chroma;
-    blue = x;
-  }
-
-  const match = value - chroma;
-
-  return {
-    red: Math.round((red + match) * 255),
-    green: Math.round((green + match) * 255),
-    blue: Math.round((blue + match) * 255),
-  };
-}
-
-function hexToHsv(hex: string): HsvColor {
-  const { red, green, blue } = hexToRgb(hex);
-  return rgbToHsv(red, green, blue);
-}
-
-function hsvToHex(hue: number, saturation: number, value: number): string {
-  const { red, green, blue } = hsvToRgb(hue, saturation, value);
-  return rgbToHex(red, green, blue);
-}
-
 type AccentColorPickerProps = {
   color: string;
-  accentInputError: string;
   onCommitHex: (nextHex: string) => void;
 };
 
-function AccentColorPicker({ color, accentInputError, onCommitHex }: AccentColorPickerProps) {
+function AccentColorPicker({ color, onCommitHex }: AccentColorPickerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [draftHex, setDraftHex] = useState(color);
   const [draftHsv, setDraftHsv] = useState<HsvColor>(() => hexToHsv(color));
@@ -263,7 +98,7 @@ function AccentColorPicker({ color, accentInputError, onCommitHex }: AccentColor
 
   const hueOnlyColor = useMemo(() => hsvToHex(draftHsv.hue, 1, 1), [draftHsv.hue]);
   const displayHex = isOpen ? draftHex : color;
-  const helperText = draftError || accentInputError || "Click the swatch to open the picker.";
+  const helperText = draftError || "Click the swatch to open the picker.";
 
   function resetDraft(): void {
     const normalized = normalizeHexColor(color) ?? color;
@@ -341,7 +176,6 @@ function AccentColorPicker({ color, accentInputError, onCommitHex }: AccentColor
 
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
       void commitHex(draftHexRef.current);
     };
 
@@ -359,7 +193,6 @@ function AccentColorPicker({ color, accentInputError, onCommitHex }: AccentColor
 
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
       void commitHex(draftHexRef.current);
     };
 
@@ -508,31 +341,28 @@ function AccentColorPicker({ color, accentInputError, onCommitHex }: AccentColor
         />
       </div>
 
-      <span className={`settings-input-help ${draftError || accentInputError ? "error" : ""}`}>{helperText}</span>
+      <span className={`settings-input-help ${draftError ? "error" : ""}`}>{helperText}</span>
     </div>
   );
 }
 
-export function SettingsModal(props: SettingsModalProps) {
-  const {
-    profile,
-    settingsSection,
-    sessionName,
-    activeGuildName,
-    minimizeToTray,
-    closeToTray,
-    accentColor,
-    accentInputError,
-    onClose,
-    onSelectSection,
-    onChangeMinimizeToTray,
-    onChangeCloseToTray,
-    onAccentInputChange,
-  } = props;
-
+export function SettingsModal({
+  profile,
+  settingsSection,
+  sessionName,
+  activeGuildName,
+  minimizeToTray,
+  closeToTray,
+  accentColor,
+  onClose,
+  onSelectSection,
+  onChangeMinimizeToTray,
+  onChangeCloseToTray,
+  onCommitAccentColor,
+}: SettingsModalProps) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
-  const [mouseWheelBehavior, setMouseWheelBehavior] = useState<MouseWheelBehavior>(() => readStoredMouseWheelBehavior());
+  const [mouseWheelBehavior, setMouseWheelBehavior] = useState(() => readStoredMouseWheelBehavior());
 
   async function handleLogout(): Promise<void> {
     setIsLoggingOut(true);
@@ -547,7 +377,7 @@ export function SettingsModal(props: SettingsModalProps) {
     }
   }
 
-  function handleChangeMouseWheelBehavior(nextValue: MouseWheelBehavior): void {
+  function handleChangeMouseWheelBehavior(nextValue: "zoom" | "navigate"): void {
     setMouseWheelBehavior(nextValue);
     commitMouseWheelBehavior(nextValue);
   }
@@ -618,11 +448,7 @@ export function SettingsModal(props: SettingsModalProps) {
           </div>
 
           <div className="settings-card panel-surface-secondary">
-            <AccentColorPicker
-              color={accentColor}
-              accentInputError={accentInputError}
-              onCommitHex={onAccentInputChange}
-            />
+            <AccentColorPicker color={accentColor} onCommitHex={onCommitAccentColor} />
           </div>
         </>
       );
@@ -676,7 +502,7 @@ export function SettingsModal(props: SettingsModalProps) {
               id="viewer-wheel-behavior"
               className="form-text-input settings-select-input"
               value={mouseWheelBehavior}
-              onChange={(event) => handleChangeMouseWheelBehavior(event.currentTarget.value as MouseWheelBehavior)}
+              onChange={(event) => handleChangeMouseWheelBehavior(event.currentTarget.value as "zoom" | "navigate")}
             >
               <option value="zoom">Zoom image</option>
               <option value="navigate">Go to previous / next item</option>

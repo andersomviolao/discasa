@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
-import type { LibraryItem } from "@discasa/shared";
-import { restoreLibraryItemOriginal, saveLibraryItemMediaEdit } from "../lib/api";
+import type { LibraryItem, SaveLibraryItemMediaEditInput } from "@discasa/shared";
 import {
   createViewerDraftStateFromItem,
   hasPendingViewerSave,
   toMediaEditSaveInput,
 } from "../lib/media-edits";
+import { readStoredMouseWheelBehavior, VIEWER_WHEEL_BEHAVIOR_EVENT } from "../lib/ui-preferences";
 import type { GalleryDisplayMode, MouseWheelBehavior, ViewerDraftState, ViewerState } from "../ui-types";
 import "../gallery-stage2.css";
-import "../gallery-stage8.css";
 import { BulkActionBar } from "./BulkActionBar";
 import { LibraryToolbar } from "./LibraryToolbar";
 import { GalleryGrid } from "./GalleryGrid";
@@ -38,20 +37,10 @@ type LibraryPanelProps = {
   onToggleFavorite: (itemId: string) => Promise<void>;
   onMoveToTrash: (itemId: string) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
+  onSaveMediaEdit: (itemId: string, input: SaveLibraryItemMediaEditInput) => Promise<LibraryItem>;
+  onRestoreMediaEdit: (itemId: string) => Promise<LibraryItem>;
   onDeleteItem: (itemId: string) => Promise<void>;
 };
-
-const VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY = "discasa.viewer.mouseWheelBehavior";
-const VIEWER_WHEEL_BEHAVIOR_EVENT = "discasa:viewer-wheel-behavior";
-
-function readStoredMouseWheelBehavior(): MouseWheelBehavior {
-  if (typeof window === "undefined") {
-    return "zoom";
-  }
-
-  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
-  return raw === "navigate" ? "navigate" : "zoom";
-}
 
 function HeartIcon({ filled }: { filled: boolean }) {
   return (
@@ -111,6 +100,8 @@ export function LibraryPanel({
   onToggleFavorite,
   onMoveToTrash,
   onRestoreFromTrash,
+  onSaveMediaEdit,
+  onRestoreMediaEdit,
   onDeleteItem,
 }: LibraryPanelProps) {
   const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>("free");
@@ -120,21 +111,8 @@ export function LibraryPanel({
   const [isSavingViewerEdit, setIsSavingViewerEdit] = useState(false);
   const [viewerSaveError, setViewerSaveError] = useState("");
   const [viewerSaveNotice, setViewerSaveNotice] = useState("");
-  const [itemEditOverrides, setItemEditOverrides] = useState<Record<string, Pick<LibraryItem, "savedMediaEdit" | "originalSource">>>({});
 
-  const displayItems = useMemo(
-    () =>
-      items.map((item) => {
-        const override = itemEditOverrides[item.id];
-        return override
-          ? {
-              ...item,
-              ...override,
-            }
-          : item;
-      }),
-    [itemEditOverrides, items],
-  );
+  const displayItems = items;
 
   const thumbnailZoomProgress = useMemo(() => {
     if (thumbnailZoomLevelCount <= 1) {
@@ -163,6 +141,9 @@ export function LibraryPanel({
   }, [displayItems, viewerState]);
 
   const activeViewerItem = activeViewerIndex >= 0 ? displayItems[activeViewerIndex] ?? null : null;
+  const activeViewerSavedEditKey = activeViewerItem?.savedMediaEdit
+    ? `${activeViewerItem.savedMediaEdit.rotationDegrees}:${activeViewerItem.savedMediaEdit.hasCrop}:${activeViewerItem.savedMediaEdit.savedAt}`
+    : "none";
   const viewerHasPendingSave = hasPendingViewerSave(activeViewerItem, viewerDraftState);
 
   useEffect(() => {
@@ -219,7 +200,7 @@ export function LibraryPanel({
     setViewerDraftState(createViewerDraftStateFromItem(activeViewerItem));
     setViewerSaveError("");
     setViewerSaveNotice("");
-  }, [activeViewerItem?.id, viewerState]);
+  }, [viewerState, activeViewerItem?.id, activeViewerSavedEditKey]);
 
   useEffect(() => {
     if (!viewerState) {
@@ -333,16 +314,9 @@ export function LibraryPanel({
     setViewerSaveNotice("");
 
     try {
-      const response = await saveLibraryItemMediaEdit(activeViewerItem.id, toMediaEditSaveInput(viewerDraftState));
-      setItemEditOverrides((current) => ({
-        ...current,
-        [activeViewerItem.id]: {
-          savedMediaEdit: response.item.savedMediaEdit ?? null,
-          originalSource: response.item.originalSource ?? null,
-        },
-      }));
-      setViewerDraftState(createViewerDraftStateFromItem(response.item));
-      setViewerSaveNotice(response.item.savedMediaEdit ? "Edits saved for this image." : "Image restored to the original view.");
+      const nextItem = await onSaveMediaEdit(activeViewerItem.id, toMediaEditSaveInput(viewerDraftState));
+      setViewerDraftState(createViewerDraftStateFromItem(nextItem));
+      setViewerSaveNotice(nextItem.savedMediaEdit ? "Edits saved for this image." : "Image restored to the original view.");
     } catch (caughtError) {
       setViewerSaveError(caughtError instanceof Error ? caughtError.message : "Could not save the image edits.");
     } finally {
@@ -360,15 +334,8 @@ export function LibraryPanel({
     setViewerSaveNotice("");
 
     try {
-      const response = await restoreLibraryItemOriginal(activeViewerItem.id);
-      setItemEditOverrides((current) => ({
-        ...current,
-        [activeViewerItem.id]: {
-          savedMediaEdit: response.item.savedMediaEdit ?? null,
-          originalSource: response.item.originalSource ?? null,
-        },
-      }));
-      setViewerDraftState(createViewerDraftStateFromItem(response.item));
+      const nextItem = await onRestoreMediaEdit(activeViewerItem.id);
+      setViewerDraftState(createViewerDraftStateFromItem(nextItem));
       setViewerSaveNotice("Original restored for this image.");
     } catch (caughtError) {
       setViewerSaveError(caughtError instanceof Error ? caughtError.message : "Could not restore the original image.");

@@ -8,6 +8,7 @@ import {
   type DiscasaConfig,
   type GuildSummary,
   type LibraryItem,
+  type SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
 import {
   createAlbum,
@@ -26,6 +27,8 @@ import {
   renameAlbum,
   reorderAlbums,
   restoreFromTrash,
+  restoreLibraryItemOriginal as restoreLibraryItemOriginalRequest,
+  saveLibraryItemMediaEdit as saveLibraryItemMediaEditRequest,
   toggleFavorite,
   updateAppConfig,
   uploadFiles,
@@ -42,6 +45,8 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusToast } from "./components/StatusToast";
 import { Titlebar } from "./components/Titlebar";
 import { DEFAULT_PROFILE, getCurrentDescription, getCurrentTitle, getVisibleItems } from "./lib/library-helpers";
+import { clampNumber, hexToRgbChannels, normalizeHexColor, tintHexColor } from "./lib/color";
+import { readStoredBoolean, readStoredNumber, readStoredString } from "./lib/ui-preferences";
 import type { AlbumContextMenuState, SettingsSection, SidebarView, WindowState } from "./ui-types";
 
 const appWindow = getCurrentWindow();
@@ -62,10 +67,6 @@ function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 function getClosestThumbnailZoomIndex(value: number): number {
   let closestIndex = 0;
   let closestDistance = Number.POSITIVE_INFINITY;
@@ -83,67 +84,6 @@ function getClosestThumbnailZoomIndex(value: number): number {
 
 function getThumbnailSizeFromZoomPercent(value: number): number {
   return Math.round((THUMBNAIL_BASE_SIZE * value) / 100);
-}
-
-function readStoredBoolean(key: string, fallback: boolean): boolean {
-  if (typeof window === "undefined") return fallback;
-  const raw = window.localStorage.getItem(key);
-  if (raw === null) return fallback;
-  return raw === "1";
-}
-
-function readStoredString(key: string, fallback: string): string {
-  if (typeof window === "undefined") return fallback;
-  const raw = window.localStorage.getItem(key);
-  return raw && raw.trim().length > 0 ? raw : fallback;
-}
-
-function readStoredNumber(key: string, fallback: number): number {
-  if (typeof window === "undefined") return fallback;
-  const raw = window.localStorage.getItem(key);
-  if (raw === null) return fallback;
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-function normalizeHexColor(value: string): string | null {
-  const raw = value.trim().replace(/^#/, "");
-
-  if (/^[0-9a-fA-F]{3}$/.test(raw)) {
-    const expanded = raw
-      .split("")
-      .map((character) => `${character}${character}`)
-      .join("");
-
-    return `#${expanded.toUpperCase()}`;
-  }
-
-  if (/^[0-9a-fA-F]{6}$/.test(raw)) {
-    return `#${raw.toUpperCase()}`;
-  }
-
-  return null;
-}
-
-function hexToRgbChannels(hex: string): string {
-  const normalized = normalizeHexColor(hex) ?? DEFAULT_ACCENT_HEX;
-  const value = normalized.slice(1);
-  const red = Number.parseInt(value.slice(0, 2), 16);
-  const green = Number.parseInt(value.slice(2, 4), 16);
-  const blue = Number.parseInt(value.slice(4, 6), 16);
-  return `${red}, ${green}, ${blue}`;
-}
-
-function tintHexColor(hex: string, amount: number): string {
-  const normalized = normalizeHexColor(hex) ?? DEFAULT_ACCENT_HEX;
-  const value = normalized.slice(1);
-  const channels = [0, 2, 4].map((start) => Number.parseInt(value.slice(start, start + 2), 16));
-  const tinted = channels.map((channel) => {
-    const mixed = Math.round(channel + (255 - channel) * amount);
-    return Math.max(0, Math.min(255, mixed)).toString(16).padStart(2, "0");
-  });
-  return `#${tinted.join("").toUpperCase()}`;
 }
 
 function getRequiredAuthSetupStep(session: AppSession): AuthSetupStep | null {
@@ -176,7 +116,6 @@ export function App() {
   });
   const [isLoadingGuilds, setIsLoadingGuilds] = useState(false);
   const [isApplyingGuild, setIsApplyingGuild] = useState(false);
-  const [discordSettingsError, setDiscordSettingsError] = useState("");
   const [authSetupStep, setAuthSetupStep] = useState<AuthSetupStep | null>(null);
   const [authSetupError, setAuthSetupError] = useState("");
   const [isCheckingSetup, setIsCheckingSetup] = useState(false);
@@ -194,8 +133,6 @@ export function App() {
   const [minimizeToTray, setMinimizeToTray] = useState<boolean>(() => readStoredBoolean(MINIMIZE_TO_TRAY_KEY, false));
   const [closeToTray, setCloseToTray] = useState<boolean>(() => readStoredBoolean(CLOSE_TO_TRAY_KEY, false));
   const [accentColor, setAccentColor] = useState<string>(() => readStoredString(ACCENT_COLOR_KEY, DEFAULT_ACCENT_HEX));
-  const [accentInput, setAccentInput] = useState<string>(() => readStoredString(ACCENT_COLOR_KEY, DEFAULT_ACCENT_HEX));
-  const [accentInputError, setAccentInputError] = useState("");
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingAlbum, setIsDeletingAlbum] = useState(false);
   const [deleteAlbumError, setDeleteAlbumError] = useState("");
@@ -286,8 +223,8 @@ export function App() {
     const root = document.documentElement;
 
     root.style.setProperty("--accent-color", normalized);
-    root.style.setProperty("--accent-rgb", hexToRgbChannels(normalized));
-    root.style.setProperty("--accent-color-hover", tintHexColor(normalized, 0.12));
+    root.style.setProperty("--accent-rgb", hexToRgbChannels(normalized, DEFAULT_ACCENT_HEX));
+    root.style.setProperty("--accent-color-hover", tintHexColor(normalized, 0.12, DEFAULT_ACCENT_HEX));
 
     if (typeof window !== "undefined") {
       window.localStorage.setItem(ACCENT_COLOR_KEY, normalized);
@@ -491,8 +428,6 @@ export function App() {
     setMinimizeToTray(nextConfig.minimizeToTray);
     setCloseToTray(nextConfig.closeToTray);
     setAccentColor(normalizedAccent);
-    setAccentInput(normalizedAccent);
-    setAccentInputError("");
     setThumbnailZoomIndex(getClosestThumbnailZoomIndex(nextConfig.thumbnailZoomPercent));
   }
 
@@ -539,7 +474,6 @@ export function App() {
 
   async function loadEligibleGuilds(preferredGuildId?: string): Promise<GuildSummary[]> {
     setIsLoadingGuilds(true);
-    setDiscordSettingsError("");
 
     try {
       const nextGuilds = await getGuilds();
@@ -549,7 +483,6 @@ export function App() {
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not load the Discord server list.";
       setGuilds([]);
-      setDiscordSettingsError(nextError);
       setAuthSetupError(nextError);
       return [];
     } finally {
@@ -729,10 +662,6 @@ export function App() {
     setAlbumContextMenu(null);
     setSettingsSection("discord");
     setIsSettingsOpen(true);
-
-    if (sessionName && !guilds.length && !isLoadingGuilds) {
-      void loadEligibleGuilds(activeGuildId || undefined);
-    }
   }
 
   function openCreateAlbumModal(): void {
@@ -942,7 +871,6 @@ export function App() {
 
     try {
       setIsApplyingGuild(true);
-      setDiscordSettingsError("");
       setAuthSetupError("");
       await initializeDiscasa(guildIdToApply);
       setSelectedGuildId(guildIdToApply);
@@ -954,25 +882,14 @@ export function App() {
       setAuthSetupStep(null);
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not apply the selected server.";
-      setDiscordSettingsError(nextError);
       setAuthSetupError(nextError);
     } finally {
       setIsApplyingGuild(false);
     }
   }
 
-  async function handleApplySelectedGuild(): Promise<void> {
-    if (!selectedGuildId) {
-      setDiscordSettingsError("Select a server first.");
-      return;
-    }
-
-    await applyGuildSelection(selectedGuildId);
-  }
-
   async function handleOpenDiscordLoginFlow(): Promise<void> {
     setIsSettingsOpen(false);
-    setDiscordSettingsError("");
     setAuthSetupError("");
     setIsCheckingSetup(false);
     setHasOpenedBotInvite(false);
@@ -1090,16 +1007,6 @@ export function App() {
     await applyGuildSelection(selectedGuildId, `Discasa applied to ${selectedGuildName ?? "the selected server"}.`);
   }
 
-  function handleOpenDiscordBotInstall(): void {
-    if (!selectedGuildId) {
-      setDiscordSettingsError("Select a server first.");
-      return;
-    }
-
-    setDiscordSettingsError("");
-    openDiscordBotInstall(selectedGuildId);
-  }
-
   async function handleToggleFavorite(itemId: string): Promise<void> {
     try {
       const response = await toggleFavorite(itemId);
@@ -1131,6 +1038,21 @@ export function App() {
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not restore the file.");
     }
+  }
+
+  async function handleSaveMediaEdit(
+    itemId: string,
+    input: SaveLibraryItemMediaEditInput,
+  ): Promise<LibraryItem> {
+    const response = await saveLibraryItemMediaEditRequest(itemId, input);
+    updateItemInState(response.item);
+    return response.item;
+  }
+
+  async function handleRestoreMediaEditOriginal(itemId: string): Promise<LibraryItem> {
+    const response = await restoreLibraryItemOriginalRequest(itemId);
+    updateItemInState(response.item);
+    return response.item;
   }
 
   function handleDeleteItem(itemId: string): Promise<void> {
@@ -1182,38 +1104,10 @@ export function App() {
     void persistConfigPatch({ thumbnailZoomPercent: nextPercent });
   }
 
-  function handleAccentInputChange(nextValue: string): void {
-    const uppercased = nextValue.toUpperCase();
-    setAccentInput(uppercased);
-
-    const normalized = normalizeHexColor(uppercased);
-    if (normalized) {
-      setAccentColor(normalized);
-      setAccentInputError("");
-      void persistConfigPatch({ accentColor: normalized });
-      return;
-    }
-
-    if (uppercased.trim().length === 0) {
-      setAccentInputError("");
-      return;
-    }
-
-    setAccentInputError("Use a valid HEX value, such as #E9881D.");
-  }
-
-  function handleAccentInputBlur(): void {
-    const normalized = normalizeHexColor(accentInput);
-    if (normalized) {
-      setAccentColor(normalized);
-      setAccentInput(normalized);
-      setAccentInputError("");
-      void persistConfigPatch({ accentColor: normalized });
-      return;
-    }
-
-    setAccentInput(accentColor);
-    setAccentInputError("");
+  function handleCommitAccentColor(nextValue: string): void {
+    const normalized = normalizeHexColor(nextValue) ?? DEFAULT_ACCENT_HEX;
+    setAccentColor(normalized);
+    void persistConfigPatch({ accentColor: normalized });
   }
 
   async function handleStartDragging(event: MouseEvent<HTMLElement>): Promise<void> {
@@ -1362,6 +1256,8 @@ export function App() {
             onToggleFavorite={handleToggleFavorite}
             onMoveToTrash={handleMoveToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
+            onSaveMediaEdit={handleSaveMediaEdit}
+            onRestoreMediaEdit={handleRestoreMediaEditOriginal}
             onDeleteItem={handleDeleteItem}
           />
         </div>
@@ -1468,36 +1364,15 @@ export function App() {
           profile={profile}
           settingsSection={settingsSection}
           sessionName={sessionName}
-          guilds={guilds}
-          selectedGuildId={selectedGuildId}
           activeGuildName={activeGuildName}
-          isLoadingGuilds={isLoadingGuilds}
-          isApplyingGuild={isApplyingGuild}
-          discordSettingsError={discordSettingsError}
           minimizeToTray={minimizeToTray}
           closeToTray={closeToTray}
           accentColor={accentColor}
-          accentInput={accentInput}
-          accentInputError={accentInputError}
           onClose={() => setIsSettingsOpen(false)}
           onSelectSection={setSettingsSection}
-          onOpenDiscordLogin={() => {
-            void handleOpenDiscordLoginFlow();
-          }}
-          onOpenDiscordBotInstall={handleOpenDiscordBotInstall}
-          onSelectGuild={(guildId) => {
-            setSelectedGuildId(guildId);
-            if (discordSettingsError) {
-              setDiscordSettingsError("");
-            }
-          }}
-          onApplyGuild={() => {
-            void handleApplySelectedGuild();
-          }}
           onChangeMinimizeToTray={handleChangeMinimizeToTray}
           onChangeCloseToTray={handleChangeCloseToTray}
-          onAccentInputChange={handleAccentInputChange}
-          onAccentInputBlur={handleAccentInputBlur}
+          onCommitAccentColor={handleCommitAccentColor}
         />
       ) : null}
 

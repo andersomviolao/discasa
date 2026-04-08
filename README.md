@@ -43,12 +43,12 @@ docs/        # Internal documentation and architecture notes
 
 When Discasa is applied to a server, the project currently works with the following structure:
 
-- `Discasa` â category used by the project
-- `discasa-drive` â uploaded files and active file storage
-- `discasa-index` â item index snapshots and library state
-- `discasa-folder` â folder/album structure and item membership snapshots
-- `discasa-trash` â trash storage flow for removed items
-- `discasa-config` â persisted app configuration snapshots
+- `Discasa` — category used by the project
+- `discasa-drive` — uploaded files and active file storage
+- `discasa-index` — item index snapshots and library state
+- `discasa-folder` — folder/album structure and item membership snapshots
+- `discasa-trash` — trash storage flow for removed items
+- `discasa-config` — persisted app configuration snapshots
 
 This separation reflects the current direction of the project: keeping file storage, organization metadata, and UI/app state as distinct layers.
 

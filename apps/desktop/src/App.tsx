@@ -513,7 +513,9 @@ export function App() {
       try {
         await loadRemoteConfig();
       } catch {
-        
+        // Keep local defaults when cloud settings are unavailable.
+      }
+
       if (session.authenticated) {
         await loadEligibleGuilds(session.activeGuild?.id ?? undefined);
       } else {

@@ -35,16 +35,19 @@ import {
   uploadFiles,
 } from "./lib/api";
 import logoUrl from "./assets/discasa-logo.png";
-import { AlbumContextMenu } from "./components/AlbumContextMenu";
-import { AlbumModal } from "./components/AlbumModal";
-import { AuthSetupModal, type AuthSetupStep } from "./components/AuthSetupModal";
-import { DeleteAlbumModal } from "./components/DeleteAlbumModal";
-import { DeleteFileModal } from "./components/DeleteFileModal";
-import { Gallery } from "./components/Gallery";
-import { SettingsModal } from "./components/SettingsModal";
-import { Sidebar } from "./components/Sidebar";
-import { StatusToast } from "./components/StatusToast";
-import { Titlebar } from "./components/Titlebar";
+import {
+  AlbumContextMenu,
+  AlbumModal,
+  AuthSetupModal,
+  type AuthSetupStep,
+  DeleteAlbumModal,
+  DeleteFileModal,
+  Gallery,
+  SettingsModal,
+  Sidebar,
+  StatusToast,
+  Titlebar,
+} from "./components/Components";
 import { DEFAULT_PROFILE, getCurrentDescription, getCurrentTitle, getVisibleItems } from "./lib/library-helpers";
 import { clampNumber, hexToRgbChannels, normalizeHexColor, tintHexColor } from "./lib/color";
 import { readStoredBoolean, readStoredNumber, readStoredString } from "./lib/ui-preferences";

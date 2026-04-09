@@ -39,17 +39,15 @@ import {
   readStoredMouseWheelBehavior,
   VIEWER_WHEEL_BEHAVIOR_EVENT,
   type HsvColor,
+  type AlbumContextMenuState,
+  type GalleryDisplayMode,
+  type MouseWheelBehavior,
+  type SettingsSection,
+  type SidebarView,
+  type ViewerDraftState,
+  type ViewerState,
+  type WindowState,
 } from "../lib/Lib";
-import type {
-  AlbumContextMenuState,
-  GalleryDisplayMode,
-  MouseWheelBehavior,
-  SettingsSection,
-  SidebarView,
-  ViewerDraftState,
-  ViewerState,
-  WindowState,
-} from "../ui-types";
 
 export function LibraryIcon() {
   return (

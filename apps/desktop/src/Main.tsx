@@ -3,16 +3,21 @@ import ReactDOM from "react-dom/client";
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type MouseEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
+import logoUrl from "./assets/discasa-logo.png";
+import "./styles.css";
 import {
-  DISCASA_DEFAULT_CONFIG,
-  type AlbumRecord,
-  type AppSession,
-  type DiscasaAttachmentRecoveryWarning,
-  type DiscasaConfig,
-  type GuildSummary,
-  type LibraryItem,
-  type SaveLibraryItemMediaEditInput,
-} from "@discasa/shared";
+  AlbumContextMenu,
+  AlbumModal,
+  AuthSetupModal,
+  type AuthSetupStep,
+  DeleteAlbumModal,
+  DeleteFileModal,
+  Gallery,
+  SettingsModal,
+  Sidebar,
+  StatusToast,
+  Titlebar,
+} from "./components/Components";
 import {
   createAlbum,
   deleteAlbum,
@@ -35,26 +40,22 @@ import {
   toggleFavorite,
   updateAppConfig,
   uploadFiles,
-} from "./lib/api";
-import logoUrl from "./assets/discasa-logo.png";
-import "./styles.css";
-import {
-  AlbumContextMenu,
-  AlbumModal,
-  AuthSetupModal,
-  type AuthSetupStep,
-  DeleteAlbumModal,
-  DeleteFileModal,
-  Gallery,
-  SettingsModal,
-  Sidebar,
-  StatusToast,
-  Titlebar,
-} from "./components/Components";
-import { DEFAULT_PROFILE, getCurrentDescription, getCurrentTitle, getVisibleItems } from "./lib/library-helpers";
-import { clampNumber, hexToRgbChannels, normalizeHexColor, tintHexColor } from "./lib/color";
-import { readStoredBoolean, readStoredNumber, readStoredString } from "./lib/ui-preferences";
-import type { AlbumContextMenuState, SettingsSection, SidebarView, WindowState } from "./ui-types";
+  DEFAULT_PROFILE,
+  getCurrentDescription,
+  getCurrentTitle,
+  getVisibleItems,
+  clampNumber,
+  hexToRgbChannels,
+  normalizeHexColor,
+  tintHexColor,
+  readStoredBoolean,
+  readStoredNumber,
+  readStoredString,
+  type AlbumContextMenuState,
+  type SettingsSection,
+  type SidebarView,
+  type WindowState,
+} from "./lib/Lib";
 
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";

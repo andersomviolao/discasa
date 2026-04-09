@@ -2795,3 +2795,51 @@ strong {
     width: 100%;
   }
 }
+
+/* Merged from recovery.css */
+.library-warning-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 181, 186, 0.16);
+  background: rgba(123, 34, 41, 0.18);
+}
+
+.library-warning-title {
+  color: rgba(255, 225, 227, 0.96);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.library-warning-copy {
+  color: rgba(255, 200, 204, 0.86);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.library-warning-copy.compact {
+  color: rgba(255, 216, 219, 0.74);
+}
+
+.media-viewer-missing-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(123, 34, 41, 0.24);
+  color: rgba(255, 181, 186, 0.96);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.media-viewer-file-warning {
+  max-width: 420px;
+  color: rgba(255, 181, 186, 0.92);
+  font-size: 12px;
+  line-height: 1.5;
+}

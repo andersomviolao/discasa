@@ -40,7 +40,7 @@ import { AlbumModal } from "./components/AlbumModal";
 import { AuthSetupModal, type AuthSetupStep } from "./components/AuthSetupModal";
 import { DeleteAlbumModal } from "./components/DeleteAlbumModal";
 import { DeleteFileModal } from "./components/DeleteFileModal";
-import { LibraryPanel } from "./components/LibraryPanel";
+import { Gallery } from "./components/Gallery";
 import { SettingsModal } from "./components/SettingsModal";
 import { Sidebar } from "./components/Sidebar";
 import { StatusToast } from "./components/StatusToast";
@@ -409,7 +409,7 @@ export function App() {
           setAuthSetupStep("select-server");
         }
       } catch {
-        // Keep waiting until the browser flow completes or the user goes back.
+        return;
       }
     };
 
@@ -513,9 +513,7 @@ export function App() {
       try {
         await loadRemoteConfig();
       } catch {
-        // Keep local defaults when cloud settings are unavailable.
-      }
-
+        
       if (session.authenticated) {
         await loadEligibleGuilds(session.activeGuild?.id ?? undefined);
       } else {
@@ -1054,10 +1052,7 @@ export function App() {
     }
   }
 
-  async function handleSaveMediaEdit(
-    itemId: string,
-    input: SaveLibraryItemMediaEditInput,
-  ): Promise<LibraryItem> {
+  async function handleSaveMediaEdit(itemId: string, input: SaveLibraryItemMediaEditInput): Promise<LibraryItem> {
     const response = await saveLibraryItemMediaEditRequest(itemId, input);
     updateItemInState(response.item);
     return response.item;
@@ -1132,7 +1127,7 @@ export function App() {
     try {
       await appWindow.startDragging();
     } catch {
-      // Browser preview fallback.
+      return;
     }
   }
 
@@ -1247,7 +1242,7 @@ export function App() {
             onOpenAlbumContextMenu={handleAlbumContextMenu}
           />
 
-          <LibraryPanel
+          <Gallery
             title={currentTitle}
             description={currentDescription}
             items={visibleItems}

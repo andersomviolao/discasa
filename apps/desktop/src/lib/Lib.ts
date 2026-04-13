@@ -455,22 +455,52 @@ export function readStoredNumber(key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-export function readStoredMouseWheelBehavior(): MouseWheelBehavior {
-  if (!canUseWindow()) {
-    return "zoom";
-  }
-
-  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
+function normalizeMouseWheelBehavior(raw: unknown): MouseWheelBehavior {
   return raw === "navigate" ? "navigate" : "zoom";
 }
 
-export function commitMouseWheelBehavior(nextValue: MouseWheelBehavior): void {
+function applyMouseWheelBehaviorLocally(nextValue: MouseWheelBehavior): void {
   if (!canUseWindow()) {
     return;
   }
 
   window.localStorage.setItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY, nextValue);
   window.dispatchEvent(new CustomEvent<MouseWheelBehavior>(VIEWER_WHEEL_BEHAVIOR_EVENT, { detail: nextValue }));
+}
+
+export function readStoredMouseWheelBehavior(): MouseWheelBehavior {
+  if (!canUseWindow()) {
+    return "zoom";
+  }
+
+  const raw = window.localStorage.getItem(VIEWER_MOUSE_WHEEL_BEHAVIOR_KEY);
+  return normalizeMouseWheelBehavior(raw);
+}
+
+export function commitMouseWheelBehavior(
+  nextValue: MouseWheelBehavior,
+  options?: { persistRemote?: boolean },
+): void {
+  const normalized = normalizeMouseWheelBehavior(nextValue);
+
+  if (!canUseWindow()) {
+    return;
+  }
+
+  applyMouseWheelBehaviorLocally(normalized);
+
+  if (options?.persistRemote === false) {
+    return;
+  }
+
+  void requestJson<DiscasaConfig>("/api/config", {
+    method: "PATCH",
+    body: JSON.stringify({
+      viewerMouseWheelBehavior: normalized,
+    }),
+  }).catch(() => {
+    // Keep the UI responsive even if the remote config save fails.
+  });
 }
 
 export async function getSession(): Promise<AppSession> {
@@ -494,14 +524,19 @@ export async function initializeDiscasa(guildId: string): Promise<DiscasaInitial
 }
 
 export async function getAppConfig(): Promise<DiscasaConfig> {
-  return requestJson<DiscasaConfig>("/api/config");
+  const config = await requestJson<DiscasaConfig>("/api/config");
+  commitMouseWheelBehavior(config.viewerMouseWheelBehavior, { persistRemote: false });
+  return config;
 }
 
 export async function updateAppConfig(input: Partial<DiscasaConfig>): Promise<DiscasaConfig> {
-  return requestJson<DiscasaConfig>("/api/config", {
+  const config = await requestJson<DiscasaConfig>("/api/config", {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+
+  commitMouseWheelBehavior(config.viewerMouseWheelBehavior, { persistRemote: false });
+  return config;
 }
 
 export async function getAlbums(): Promise<AlbumRecord[]> {

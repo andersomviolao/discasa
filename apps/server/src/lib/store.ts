@@ -125,6 +125,8 @@ function normalizeDiscasaConfig(raw: unknown): DiscasaConfig {
       typeof entry.thumbnailZoomPercent === "number" && Number.isFinite(entry.thumbnailZoomPercent)
         ? Math.round(entry.thumbnailZoomPercent)
         : fallback.thumbnailZoomPercent,
+    viewerMouseWheelBehavior:
+      entry.viewerMouseWheelBehavior === "navigate" ? "navigate" : fallback.viewerMouseWheelBehavior,
     sidebarCollapsed: typeof entry.sidebarCollapsed === "boolean" ? entry.sidebarCollapsed : fallback.sidebarCollapsed,
   };
 }

@@ -3,8 +3,6 @@ import {
   DISCASA_CHANNELS,
   type DiscasaAttachmentRecoveryWarning,
   type DiscasaConfig,
-  type FolderMembership,
-  type FolderNode,
   type GuildSummary,
   type LibraryItem,
   type LibraryItemIndex,
@@ -32,20 +30,9 @@ type DiscordUserGuild = {
   permissions: string;
 };
 
-type LegacyPersistedAlbum = {
-  id: string;
-  name: string;
-};
-
-type LegacyPersistedIndexSnapshot = {
-  version: 1;
-  albums: LegacyPersistedAlbum[];
-  items: LibraryItem[];
-};
-
 type DiscasaInstallMarker = {
   app: "discasa";
-  version: 1;
+  version: 2;
   guildId: string;
   categoryName: string;
   channels: readonly string[];
@@ -79,11 +66,14 @@ export type RefreshIndexSnapshotResult = {
   didChange: boolean;
 };
 
+const DRIVE_CHANNEL_NAME = "drive";
+const CONFIG_CHANNEL_NAME = "config";
+const TRASH_CHANNEL_NAME = "trash";
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
-const LEGACY_INDEX_SNAPSHOT_FILENAME = "discasa-index.json";
 const FOLDER_SNAPSHOT_FILENAME = "discasa-folder.snapshot.json";
 const CONFIG_SNAPSHOT_FILENAME = "discasa-config.snapshot.json";
 const INSTALL_MARKER_FILENAME = "discasa-install.marker.json";
+
 let botClient: Client | null = null;
 
 async function getBotClient(): Promise<Client | null> {
@@ -482,15 +472,6 @@ function isIndexSnapshot(raw: unknown): raw is PersistedIndexSnapshot {
   return entry.version === 2 && Array.isArray(entry.items);
 }
 
-function isLegacyIndexSnapshot(raw: unknown): raw is LegacyPersistedIndexSnapshot {
-  if (!raw || typeof raw !== "object") {
-    return false;
-  }
-
-  const entry = raw as Record<string, unknown>;
-  return entry.version === 1 && Array.isArray(entry.albums) && Array.isArray(entry.items);
-}
-
 function isFolderSnapshot(raw: unknown): raw is PersistedFolderSnapshot {
   if (!raw || typeof raw !== "object") {
     return false;
@@ -532,57 +513,11 @@ function isInstallMarker(raw: unknown): raw is DiscasaInstallMarker {
   const entry = raw as Record<string, unknown>;
   return (
     entry.app === "discasa" &&
-    entry.version === 1 &&
+    entry.version === 2 &&
     typeof entry.guildId === "string" &&
     typeof entry.categoryName === "string" &&
     Array.isArray(entry.channels)
   );
-}
-
-function convertLegacyIndexToCurrent(raw: LegacyPersistedIndexSnapshot): PersistedIndexSnapshot {
-  return {
-    version: 2,
-    updatedAt: new Date().toISOString(),
-    items: raw.items.map((item) => {
-      const { albumIds: _albumIds, ...indexItem } = item;
-      return {
-        ...indexItem,
-        attachmentStatus: item.attachmentStatus === "missing" ? "missing" : "ready",
-      };
-    }),
-  };
-}
-
-function deriveFolderSnapshotFromLegacyIndex(raw: LegacyPersistedIndexSnapshot): PersistedFolderSnapshot {
-  const timestamp = new Date().toISOString();
-  const folders: FolderNode[] = raw.albums.map((album, position) => ({
-    id: album.id,
-    type: "album",
-    name: album.name,
-    parentId: null,
-    position,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  }));
-
-  const memberships: FolderMembership[] = [];
-
-  for (const item of raw.items) {
-    for (const folderId of item.albumIds) {
-      memberships.push({
-        folderId,
-        itemId: item.id,
-        addedAt: item.uploadedAt,
-      });
-    }
-  }
-
-  return {
-    version: 1,
-    updatedAt: timestamp,
-    folders,
-    memberships,
-  };
 }
 
 async function readSnapshotMessage(
@@ -683,13 +618,11 @@ function buildActiveStorageContext(
   category: { id: string; name: string },
   channels: Map<string, { id: string; name: string }>,
 ): ActiveStorageContext {
-  const driveChannel = channels.get(DISCASA_CHANNELS[0]);
-  const indexChannel = channels.get(DISCASA_CHANNELS[1]);
-  const folderChannel = channels.get(DISCASA_CHANNELS[2]);
-  const trashChannel = channels.get(DISCASA_CHANNELS[3]);
-  const configChannel = channels.get(DISCASA_CHANNELS[4]);
+  const driveChannel = channels.get(DRIVE_CHANNEL_NAME);
+  const configChannel = channels.get(CONFIG_CHANNEL_NAME);
+  const trashChannel = channels.get(TRASH_CHANNEL_NAME);
 
-  if (!driveChannel || !indexChannel || !folderChannel || !trashChannel || !configChannel) {
+  if (!driveChannel || !configChannel || !trashChannel) {
     throw new Error("Discasa storage channels could not be resolved.");
   }
 
@@ -700,10 +633,10 @@ function buildActiveStorageContext(
     categoryName: category.name,
     driveChannelId: driveChannel.id,
     driveChannelName: driveChannel.name,
-    indexChannelId: indexChannel.id,
-    indexChannelName: indexChannel.name,
-    folderChannelId: folderChannel.id,
-    folderChannelName: folderChannel.name,
+    indexChannelId: configChannel.id,
+    indexChannelName: configChannel.name,
+    folderChannelId: configChannel.id,
+    folderChannelName: configChannel.name,
     trashChannelId: trashChannel.id,
     trashChannelName: trashChannel.name,
     configChannelId: configChannel.id,
@@ -714,7 +647,7 @@ function buildActiveStorageContext(
 async function syncInstallMarker(context: ActiveStorageContext): Promise<void> {
   const marker: DiscasaInstallMarker = {
     app: "discasa",
-    version: 1,
+    version: 2,
     guildId: context.guildId,
     categoryName: context.categoryName,
     channels: DISCASA_CHANNELS,
@@ -979,7 +912,7 @@ export async function inspectDiscasaSetup(guildId: string): Promise<DiscasaSetup
 
   await guild.channels.fetch();
   const structure = resolveDiscasaStructure(guild);
-  const configChannel = structure.channels.get("discasa-config");
+  const configChannel = structure.channels.get(CONFIG_CHANNEL_NAME);
   const configMarkerPresent = configChannel ? Boolean(await readInstallMarker(configChannel.id)) : false;
   const categoryPresent = Boolean(structure.category);
   const channelsPresent = structure.missingChannels.length === 0;
@@ -1003,15 +936,15 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
       categoryId: "mock-category",
       categoryName: DISCASA_CATEGORY_NAME,
       driveChannelId: "mock-drive",
-      driveChannelName: DISCASA_CHANNELS[0],
-      indexChannelId: "mock-index",
-      indexChannelName: DISCASA_CHANNELS[1],
-      folderChannelId: "mock-folder",
-      folderChannelName: DISCASA_CHANNELS[2],
+      driveChannelName: DRIVE_CHANNEL_NAME,
+      indexChannelId: "mock-config",
+      indexChannelName: CONFIG_CHANNEL_NAME,
+      folderChannelId: "mock-config",
+      folderChannelName: CONFIG_CHANNEL_NAME,
       trashChannelId: "mock-trash",
-      trashChannelName: DISCASA_CHANNELS[3],
+      trashChannelName: TRASH_CHANNEL_NAME,
       configChannelId: "mock-config",
-      configChannelName: DISCASA_CHANNELS[4],
+      configChannelName: CONFIG_CHANNEL_NAME,
     };
   }
 
@@ -1054,7 +987,7 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
 
   const resolvedChannels = new Map(initialStructure.channels);
 
-  for (const channelName of DISCASA_CHANNELS) {
+  for (const [position, channelName] of DISCASA_CHANNELS.entries()) {
     const existing = resolvedChannels.get(channelName);
 
     if (existing) {
@@ -1065,6 +998,7 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
           permissionOverwrites: discasaOverwrites,
           reason: "Secure Discasa channel permissions",
         });
+        await existingChannel.setPosition(position);
       }
       continue;
     }
@@ -1077,6 +1011,7 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
       reason: "Initialize private Discasa channels",
     });
 
+    await nextChannel.setPosition(position);
     resolvedChannels.set(channelName, {
       id: nextChannel.id,
       name: nextChannel.name,
@@ -1127,7 +1062,7 @@ export async function hasCurrentIndexSnapshot(context: ActiveStorageContext): Pr
     return false;
   }
 
-  return Boolean(await readSnapshotMessage(context.indexChannelId, [INDEX_SNAPSHOT_FILENAME]));
+  return Boolean(await readSnapshotMessage(context.configChannelId, [INDEX_SNAPSHOT_FILENAME]));
 }
 
 export async function hasCurrentFolderSnapshot(context: ActiveStorageContext): Promise<boolean> {
@@ -1135,7 +1070,7 @@ export async function hasCurrentFolderSnapshot(context: ActiveStorageContext): P
     return false;
   }
 
-  return Boolean(await readSnapshotMessage(context.folderChannelId, [FOLDER_SNAPSHOT_FILENAME]));
+  return Boolean(await readSnapshotMessage(context.configChannelId, [FOLDER_SNAPSHOT_FILENAME]));
 }
 
 export async function hasCurrentConfigSnapshot(context: ActiveStorageContext): Promise<boolean> {
@@ -1153,22 +1088,17 @@ export async function readLatestIndexSnapshot(
     return null;
   }
 
-  const found = await readJsonSnapshot(context.indexChannelId, [INDEX_SNAPSHOT_FILENAME, LEGACY_INDEX_SNAPSHOT_FILENAME]);
-  if (!found) {
-    return null;
+  const current = await readJsonSnapshot(context.configChannelId, [INDEX_SNAPSHOT_FILENAME]);
+  if (current && isIndexSnapshot(current.payload)) {
+    return current.payload;
   }
 
-  if (isIndexSnapshot(found.payload)) {
-    return found.payload;
+  if (current) {
+    console.warn(
+      `[Discasa snapshot] ${current.fileName} in channel ${context.configChannelId} is not a valid Discasa index snapshot.`,
+    );
   }
 
-  if (isLegacyIndexSnapshot(found.payload)) {
-    return convertLegacyIndexToCurrent(found.payload);
-  }
-
-  console.warn(
-    `[Discasa snapshot] ${found.fileName} in channel ${context.indexChannelId} is not a valid Discasa index snapshot.`,
-  );
   return null;
 }
 
@@ -1179,25 +1109,14 @@ export async function readLatestFolderSnapshot(
     return null;
   }
 
-  const current = await readJsonSnapshot(context.folderChannelId, [FOLDER_SNAPSHOT_FILENAME]);
+  const current = await readJsonSnapshot(context.configChannelId, [FOLDER_SNAPSHOT_FILENAME]);
   if (current && isFolderSnapshot(current.payload)) {
     return current.payload;
   }
 
   if (current) {
     console.warn(
-      `[Discasa snapshot] ${current.fileName} in channel ${context.folderChannelId} is not a valid Discasa folder snapshot.`,
-    );
-  }
-
-  const legacy = await readJsonSnapshot(context.indexChannelId, [LEGACY_INDEX_SNAPSHOT_FILENAME]);
-  if (legacy && isLegacyIndexSnapshot(legacy.payload)) {
-    return deriveFolderSnapshotFromLegacyIndex(legacy.payload);
-  }
-
-  if (legacy) {
-    console.warn(
-      `[Discasa snapshot] ${legacy.fileName} in channel ${context.indexChannelId} is not a valid legacy Discasa index snapshot for folder recovery.`,
+      `[Discasa snapshot] ${current.fileName} in channel ${context.configChannelId} is not a valid Discasa folder snapshot.`,
     );
   }
 
@@ -1234,11 +1153,11 @@ export async function syncIndexSnapshot(
   }
 
   await writeSnapshotToChannel(
-    context.indexChannelId,
+    context.configChannelId,
     INDEX_SNAPSHOT_FILENAME,
     JSON.stringify(snapshot, null, 2),
     "Discasa index snapshot",
-    [INDEX_SNAPSHOT_FILENAME, LEGACY_INDEX_SNAPSHOT_FILENAME],
+    [INDEX_SNAPSHOT_FILENAME],
   );
 }
 
@@ -1251,7 +1170,7 @@ export async function syncFolderSnapshot(
   }
 
   await writeSnapshotToChannel(
-    context.folderChannelId,
+    context.configChannelId,
     FOLDER_SNAPSHOT_FILENAME,
     JSON.stringify(snapshot, null, 2),
     "Discasa folder snapshot",

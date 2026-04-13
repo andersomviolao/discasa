@@ -1,5 +1,5 @@
 export const DISCASA_CATEGORY_NAME = "Discasa";
-export const DISCASA_CHANNELS = ["discasa-drive", "discasa-index", "discasa-folder", "discasa-trash", "discasa-config"] as const;
+export const DISCASA_CHANNELS = ["drive", "config", "trash"] as const;
 
 export type GuildSummary = {
   id: string;

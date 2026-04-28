@@ -28,6 +28,7 @@ import {
   type DiscasaConfig,
   type GuildSummary,
   type LibraryItem,
+  type LocalStorageStatus,
   type SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
 import logoUrl from "./assets/discasa-logo.png";
@@ -35,6 +36,7 @@ import defaultAvatarUrl from "./assets/discasa-default-avatar.png";
 import "./styles.css";
 import {
   logoutDiscord,
+  addLibraryItemsToAlbum,
   createAlbum,
   deleteAlbum,
   deleteLibraryItem,
@@ -56,9 +58,12 @@ import {
   toggleFavorite,
   updateAppConfig,
   uploadFiles,
+  chooseLocalMirrorFolder,
   DEFAULT_PROFILE,
   getCurrentDescription,
   getCurrentTitle,
+  getLibraryItemContentUrl,
+  getLibraryItemThumbnailUrl,
   getVisibleItems,
   clampNumber,
   hexToHsv,
@@ -73,6 +78,7 @@ import {
   hasPendingViewerSave,
   toMediaEditSaveInput,
   commitMouseWheelBehavior,
+  getLocalStorageStatus,
   readStoredBoolean,
   readStoredMouseWheelBehavior,
   readStoredNumber,
@@ -87,7 +93,7 @@ import {
   type ViewerDraftState,
   type ViewerState,
   type WindowState,
-} from "./lib/Lib";
+} from "./app-logic";
 
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
@@ -102,9 +108,69 @@ const DEFAULT_ACCENT_HEX = DISCASA_DEFAULT_CONFIG.accentColor;
 const THUMBNAIL_BASE_SIZE = 400;
 const THUMBNAIL_ZOOM_LEVELS = [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] as const;
 const DEFAULT_THUMBNAIL_ZOOM_PERCENT = DISCASA_DEFAULT_CONFIG.thumbnailZoomPercent;
+const DEFAULT_GALLERY_DISPLAY_MODE = DISCASA_DEFAULT_CONFIG.galleryDisplayMode;
+const CONFIG_SAVE_DEBOUNCE_MS = 700;
+const DISCASA_LIBRARY_ITEM_DRAG_MIME = "application/x-discasa-library-items";
+const DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX = "discasa-library-items:";
 
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function hasDataTransferType(dataTransfer: DataTransfer, type: string): boolean {
+  const normalizedType = type.toLowerCase();
+  return Array.from(dataTransfer.types).some((entry) => entry.toLowerCase() === normalizedType);
+}
+
+function hasExternalFileTransfer(dataTransfer: DataTransfer): boolean {
+  return hasDataTransferType(dataTransfer, "Files");
+}
+
+function readDraggedLibraryItemIds(dataTransfer: DataTransfer): string[] {
+  const customPayload = dataTransfer.getData(DISCASA_LIBRARY_ITEM_DRAG_MIME);
+  const textPayload = dataTransfer.getData("text/plain");
+  const raw = customPayload || (textPayload.startsWith(DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX)
+    ? textPayload.slice(DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX.length)
+    : "");
+
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return Array.from(new Set(parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0)));
+  } catch {
+    return [];
+  }
+}
+
+function findAlbumDropIdAtPoint(position: { x: number; y: number }): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  const candidatePoints = [
+    { x: position.x, y: position.y },
+    { x: position.x / devicePixelRatio, y: position.y / devicePixelRatio },
+  ];
+
+  for (const point of candidatePoints) {
+    const element = document.elementFromPoint(point.x, point.y);
+    const albumElement = element?.closest<HTMLElement>("[data-album-drop-id]");
+    const albumId = albumElement?.dataset.albumDropId;
+
+    if (albumId) {
+      return albumId;
+    }
+  }
+
+  return null;
 }
 
 function getClosestThumbnailZoomIndex(value: number): number {
@@ -136,6 +202,10 @@ function getRequiredAuthSetupStep(session: AppSession): AuthSetupStep | null {
   }
 
   return null;
+}
+
+function requiresLocalMirrorSetup(status: LocalStorageStatus | null): boolean {
+  return Boolean(status?.localMirrorSetupRequired);
 }
 
 export function App() {
@@ -177,6 +247,10 @@ export function App() {
   const [minimizeToTray, setMinimizeToTray] = useState<boolean>(() => readStoredBoolean(MINIMIZE_TO_TRAY_KEY, false));
   const [closeToTray, setCloseToTray] = useState<boolean>(() => readStoredBoolean(CLOSE_TO_TRAY_KEY, false));
   const [accentColor, setAccentColor] = useState<string>(() => readStoredString(ACCENT_COLOR_KEY, DEFAULT_ACCENT_HEX));
+  const [localMirrorEnabled, setLocalMirrorEnabled] = useState(DISCASA_DEFAULT_CONFIG.localMirrorEnabled);
+  const [localMirrorPath, setLocalMirrorPath] = useState<string>(DISCASA_DEFAULT_CONFIG.localMirrorPath ?? "");
+  const [localStorageStatus, setLocalStorageStatus] = useState<LocalStorageStatus | null>(null);
+  const [isChoosingMirrorFolder, setIsChoosingMirrorFolder] = useState(false);
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingAlbum, setIsDeletingAlbum] = useState(false);
   const [deleteAlbumError, setDeleteAlbumError] = useState("");
@@ -184,11 +258,14 @@ export function App() {
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteFileError, setDeleteFileError] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [draggingLibraryItemIds, setDraggingLibraryItemIds] = useState<string[]>([]);
+  const [sidebarDropAlbumId, setSidebarDropAlbumId] = useState<string | null>(null);
   const [attachmentWarnings, setAttachmentWarnings] = useState<DiscasaAttachmentRecoveryWarning[]>([]);
   const [thumbnailZoomIndex, setThumbnailZoomIndex] = useState<number>(() => {
     const storedPercent = readStoredNumber(THUMBNAIL_ZOOM_KEY, DEFAULT_THUMBNAIL_ZOOM_PERCENT);
     return getClosestThumbnailZoomIndex(storedPercent);
   });
+  const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>(DEFAULT_GALLERY_DISPLAY_MODE);
 
   const dragDepthRef = useRef(0);
   const closeToTrayRef = useRef(closeToTray);
@@ -198,6 +275,12 @@ export function App() {
   const albumsRef = useRef<AlbumRecord[]>([]);
   const selectedViewRef = useRef<SidebarView>(selectedView);
   const selectionAnchorRef = useRef<string | null>(null);
+  const draggingLibraryItemIdsRef = useRef<string[]>([]);
+  const nativeDropAlbumIdRef = useRef<string | null>(null);
+  const activeGuildIdRef = useRef(activeGuildId);
+  const pendingConfigPatchRef = useRef<Partial<DiscasaConfig> | null>(null);
+  const configSaveTimerRef = useRef<number | null>(null);
+  const isConfigSaveInFlightRef = useRef(false);
   const hasBootstrappedRef = useRef(false);
 
   const thumbnailZoomPercent = THUMBNAIL_ZOOM_LEVELS[thumbnailZoomIndex] ?? DEFAULT_THUMBNAIL_ZOOM_PERCENT;
@@ -219,6 +302,18 @@ export function App() {
   useEffect(() => {
     selectedViewRef.current = selectedView;
   }, [selectedView]);
+
+  useEffect(() => {
+    activeGuildIdRef.current = activeGuildId;
+  }, [activeGuildId]);
+
+  useEffect(() => {
+    return () => {
+      if (configSaveTimerRef.current !== null) {
+        window.clearTimeout(configSaveTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -421,7 +516,10 @@ export function App() {
 
     void appWindow
       .onDragDropEvent(async ({ payload }: { payload: DragDropEvent }) => {
-        if (payload.type === "over") {
+        if (payload.type === "enter" || payload.type === "over") {
+          const albumId = findAlbumDropIdAtPoint(payload.position);
+          nativeDropAlbumIdRef.current = albumId;
+          setSidebarDropAlbumId(albumId);
           setIsDraggingFiles(true);
           return;
         }
@@ -429,11 +527,20 @@ export function App() {
         dragDepthRef.current = 0;
         setIsDraggingFiles(false);
 
+        if (payload.type === "leave") {
+          nativeDropAlbumIdRef.current = null;
+          setSidebarDropAlbumId(null);
+          return;
+        }
+
         if (payload.type !== "drop") {
           return;
         }
 
-        await handleNativeFileDrop(payload.paths);
+        const targetAlbumId = findAlbumDropIdAtPoint(payload.position) ?? nativeDropAlbumIdRef.current ?? undefined;
+        nativeDropAlbumIdRef.current = null;
+        setSidebarDropAlbumId(null);
+        await handleNativeFileDrop(payload.paths, targetAlbumId);
       })
       .then((fn) => {
         if (disposed) {
@@ -475,7 +582,7 @@ export function App() {
           return;
         }
 
-        await loadEligibleGuilds(session.activeGuild?.id ?? undefined);
+        await loadEligibleGuilds();
         if (!disposed) {
           setAuthSetupStep("select-server");
         }
@@ -502,6 +609,9 @@ export function App() {
     setCloseToTray(nextConfig.closeToTray);
     setAccentColor(normalizedAccent);
     setThumbnailZoomIndex(getClosestThumbnailZoomIndex(nextConfig.thumbnailZoomPercent));
+    setGalleryDisplayMode(nextConfig.galleryDisplayMode);
+    setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
+    setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
   }
 
   async function loadRemoteConfig(): Promise<void> {
@@ -509,17 +619,64 @@ export function App() {
     applyRemoteConfig(nextConfig);
   }
 
-  async function persistConfigPatch(patch: Partial<DiscasaConfig>): Promise<void> {
-    if (!activeGuildId) {
+  async function loadLocalStorageStatus(): Promise<LocalStorageStatus> {
+    const nextStatus = await getLocalStorageStatus();
+    setLocalStorageStatus(nextStatus);
+    return nextStatus;
+  }
+
+  function scheduleConfigSave(delay = CONFIG_SAVE_DEBOUNCE_MS): void {
+    if (configSaveTimerRef.current !== null) {
+      window.clearTimeout(configSaveTimerRef.current);
+    }
+
+    configSaveTimerRef.current = window.setTimeout(() => {
+      configSaveTimerRef.current = null;
+      void flushConfigPatch();
+    }, delay);
+  }
+
+  async function flushConfigPatch(): Promise<void> {
+    if (isConfigSaveInFlightRef.current) {
       return;
     }
 
+    const patch = pendingConfigPatchRef.current;
+    if (!patch || !activeGuildIdRef.current) {
+      return;
+    }
+
+    pendingConfigPatchRef.current = null;
+    isConfigSaveInFlightRef.current = true;
+
     try {
-      const nextConfig = await updateAppConfig(patch);
-      applyRemoteConfig(nextConfig);
+      await updateAppConfig(patch);
+      if ("localMirrorEnabled" in patch || "localMirrorPath" in patch) {
+        await loadLocalStorageStatus();
+        setItems(await getLibraryItems());
+      }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not save the settings.");
+    } finally {
+      isConfigSaveInFlightRef.current = false;
+
+      if (pendingConfigPatchRef.current) {
+        scheduleConfigSave();
+      }
     }
+  }
+
+  function persistConfigPatch(patch: Partial<DiscasaConfig>): void {
+    if (!activeGuildIdRef.current) {
+      return;
+    }
+
+    pendingConfigPatchRef.current = {
+      ...(pendingConfigPatchRef.current ?? {}),
+      ...patch,
+    };
+
+    scheduleConfigSave();
   }
 
   function syncGuildSelection(nextGuilds: GuildSummary[], preferredGuildId?: string): void {
@@ -557,13 +714,20 @@ export function App() {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not load the Discord server list.";
       setGuilds([]);
       setAuthSetupError(nextError);
+
+      if (nextError.toLowerCase().includes("login")) {
+        setSessionName(null);
+        setSessionAvatarUrl(null);
+        setAuthSetupStep("login");
+      }
+
       return [];
     } finally {
       setIsLoadingGuilds(false);
     }
   }
 
-  async function bootstrap(): Promise<void> {
+  async function bootstrap(): Promise<AuthSetupStep | null> {
     setIsBusy(true);
     setError("");
 
@@ -587,18 +751,47 @@ export function App() {
         // Keep local defaults when cloud settings are unavailable.
       }
 
+      let nextLocalStorageStatus: LocalStorageStatus | null = null;
+      try {
+        nextLocalStorageStatus = await loadLocalStorageStatus();
+      } catch {
+        // Local storage status is informational; the app can still load without it.
+      }
+
+      let nextAuthSetupStep = getRequiredAuthSetupStep(session);
+      if (!nextAuthSetupStep && requiresLocalMirrorSetup(nextLocalStorageStatus)) {
+        nextAuthSetupStep = "local-storage";
+      }
+      let shouldClearAuthSetupError = true;
+
       if (session.authenticated) {
-        await loadEligibleGuilds(session.activeGuild?.id ?? undefined);
+        const nextGuilds = await loadEligibleGuilds(session.activeGuild?.id ?? undefined);
+
+        if (!nextGuilds.length) {
+          const refreshedSession = await getSession();
+
+          if (!refreshedSession.authenticated) {
+            setSessionName(null);
+            setSessionAvatarUrl(null);
+            nextAuthSetupStep = "login";
+            shouldClearAuthSetupError = false;
+          }
+        }
       } else {
         setGuilds([]);
       }
 
-      setAuthSetupError("");
+      if (shouldClearAuthSetupError) {
+        setAuthSetupError("");
+      }
+
       setIsCheckingSetup(false);
       setHasOpenedBotInvite(false);
-      setAuthSetupStep(getRequiredAuthSetupStep(session));
+      setAuthSetupStep(nextAuthSetupStep);
+      return nextAuthSetupStep;
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to load Discasa preview.");
+      return null;
     } finally {
       setIsBusy(false);
     }
@@ -703,6 +896,81 @@ export function App() {
 
     if (orderedItemIds.length > 0) {
       selectionAnchorRef.current = orderedItemIds[0] ?? selectionAnchorRef.current;
+    }
+  }
+
+  function handleLibraryItemDragStart(event: DragEvent<HTMLElement>, itemId: string): void {
+    const sourceItem = items.find((item) => item.id === itemId);
+
+    if (!sourceItem || sourceItem.isTrashed) {
+      event.preventDefault();
+      return;
+    }
+
+    const selectedIdSet = new Set(selectedItemIds);
+    const candidateIds = selectedIdSet.has(itemId) ? selectedItemIds : [itemId];
+    const draggableItems = candidateIds
+      .map((candidateId) => items.find((item) => item.id === candidateId) ?? null)
+      .filter((item): item is LibraryItem => Boolean(item && !item.isTrashed));
+    const draggableIds = draggableItems.map((item) => item.id);
+
+    if (!draggableIds.length) {
+      event.preventDefault();
+      return;
+    }
+
+    if (!selectedIdSet.has(itemId)) {
+      setSelectedItemIds([itemId]);
+      selectionAnchorRef.current = itemId;
+    }
+
+    event.stopPropagation();
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(DISCASA_LIBRARY_ITEM_DRAG_MIME, JSON.stringify(draggableIds));
+    event.dataTransfer.setData("text/plain", `${DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX}${JSON.stringify(draggableIds)}`);
+    draggingLibraryItemIdsRef.current = draggableIds;
+    setDraggingLibraryItemIds(draggableIds);
+
+    const dragPreview = createLibraryItemDragPreview(draggableItems);
+    event.dataTransfer.setDragImage(dragPreview, 36, 36);
+    window.setTimeout(() => dragPreview.remove(), 0);
+  }
+
+  function handleLibraryItemDragEnd(): void {
+    draggingLibraryItemIdsRef.current = [];
+    setDraggingLibraryItemIds([]);
+    setSidebarDropAlbumId(null);
+    nativeDropAlbumIdRef.current = null;
+  }
+
+  async function handleAddLibraryItemsToAlbum(albumId: string, itemIds: string[]): Promise<void> {
+    const validItemIds = new Set(items.filter((item) => !item.isTrashed).map((item) => item.id));
+    const uniqueItemIds = Array.from(new Set(itemIds)).filter((itemId) => validItemIds.has(itemId));
+
+    if (!uniqueItemIds.length) {
+      return;
+    }
+
+    setIsBusy(true);
+    setError("");
+
+    try {
+      const result = await addLibraryItemsToAlbum(albumId, uniqueItemIds);
+      const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
+      const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the album";
+
+      albumsRef.current = result.albums;
+      setAlbums(result.albums);
+      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      setMessage(`${uniqueItemIds.length} file(s) added to ${targetAlbumName}.`);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Could not add the files to the album.");
+    } finally {
+      setIsBusy(false);
+      draggingLibraryItemIdsRef.current = [];
+      setDraggingLibraryItemIds([]);
+      setSidebarDropAlbumId(null);
+      nativeDropAlbumIdRef.current = null;
     }
   }
 
@@ -923,15 +1191,17 @@ export function App() {
     }
   }
 
-  async function commitUploadedFiles(files: File[]): Promise<void> {
-    const targetAlbumId = selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined;
+  async function commitUploadedFiles(files: File[], albumId?: string): Promise<void> {
+    const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
     await uploadFiles(files, targetAlbumId);
 
     const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
+    const targetAlbumName = targetAlbumId ? nextAlbums.find((album) => album.id === targetAlbumId)?.name : "";
     albumsRef.current = nextAlbums;
     setItems(nextItems);
     setAlbums(nextAlbums);
-    setMessage(`${files.length} file(s) added to the library.`);
+    void loadLocalStorageStatus();
+    setMessage(`${files.length} file(s) added${targetAlbumName ? ` to ${targetAlbumName}` : " to the library"}.`);
     setError("");
   }
 
@@ -947,14 +1217,14 @@ export function App() {
     return new File([blob], name, { type: blob.type || "application/octet-stream" });
   }
 
-  async function handleFiles(fileList: FileList | null): Promise<void> {
+  async function handleFiles(fileList: FileList | File[] | null, albumId?: string): Promise<void> {
     if (!fileList || fileList.length === 0) return;
 
     setIsBusy(true);
     setError("");
 
     try {
-      await commitUploadedFiles(Array.from(fileList));
+      await commitUploadedFiles(Array.from(fileList), albumId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
     } finally {
@@ -962,7 +1232,7 @@ export function App() {
     }
   }
 
-  async function handleNativeFileDrop(filePaths: string[]): Promise<void> {
+  async function handleNativeFileDrop(filePaths: string[], albumId?: string): Promise<void> {
     if (filePaths.length === 0) return;
 
     setIsBusy(true);
@@ -970,7 +1240,7 @@ export function App() {
 
     try {
       const files = await Promise.all(filePaths.map((filePath) => createFileFromNativePath(filePath)));
-      await commitUploadedFiles(files);
+      await commitUploadedFiles(files, albumId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
     } finally {
@@ -998,7 +1268,6 @@ export function App() {
 
       setMessage(messageParts.join(" "));
       setError("");
-      setAuthSetupStep(null);
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not apply the selected server.";
       setAuthSetupError(nextError);
@@ -1186,6 +1455,7 @@ export function App() {
     try {
       await deleteLibraryItem(deleteFileTarget.id);
       removeItemFromState(deleteFileTarget.id);
+      void loadLocalStorageStatus();
       setMessage("File permanently deleted.");
       setError("");
       setDeleteFileTarget(null);
@@ -1214,11 +1484,93 @@ export function App() {
     void persistConfigPatch({ closeToTray: nextValue });
   }
 
+  function handleChangeLocalMirrorEnabled(nextValue: boolean): void {
+    setLocalMirrorEnabled(nextValue);
+    void persistConfigPatch({ localMirrorEnabled: nextValue });
+  }
+
+  function handleChangeLocalMirrorPath(nextValue: string): void {
+    setLocalMirrorPath(nextValue);
+    void persistConfigPatch({ localMirrorPath: nextValue.trim().length > 0 ? nextValue : null });
+  }
+
+  async function handleChooseLocalMirrorFolder(): Promise<void> {
+    setIsChoosingMirrorFolder(true);
+
+    try {
+      const selectedPath = await chooseLocalMirrorFolder();
+      if (!selectedPath) {
+        return;
+      }
+
+      setLocalMirrorPath(selectedPath);
+      void persistConfigPatch({ localMirrorPath: selectedPath });
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Could not choose the local mirror folder.");
+    } finally {
+      setIsChoosingMirrorFolder(false);
+    }
+  }
+
+  async function commitLocalMirrorSetupPath(nextPath: string | null): Promise<void> {
+    setIsApplyingGuild(true);
+    setAuthSetupError("");
+
+    try {
+      const nextConfig = await updateAppConfig({
+        localMirrorEnabled: true,
+        localMirrorPath: nextPath,
+      });
+      applyRemoteConfig(nextConfig);
+
+      const nextStatus = await loadLocalStorageStatus();
+      setItems(await getLibraryItems());
+
+      if (requiresLocalMirrorSetup(nextStatus)) {
+        setAuthSetupError("The selected local mirror folder is still not available on this computer.");
+        return;
+      }
+
+      setAuthSetupStep(null);
+      setMessage("Local mirror folder configured.");
+      setError("");
+    } catch (caughtError) {
+      setAuthSetupError(caughtError instanceof Error ? caughtError.message : "Could not configure the local mirror folder.");
+    } finally {
+      setIsApplyingGuild(false);
+    }
+  }
+
+  async function handleChooseLocalMirrorFolderFromSetup(): Promise<void> {
+    setIsChoosingMirrorFolder(true);
+
+    try {
+      const selectedPath = await chooseLocalMirrorFolder();
+      if (!selectedPath) {
+        return;
+      }
+
+      await commitLocalMirrorSetupPath(selectedPath);
+    } catch (caughtError) {
+      setAuthSetupError(caughtError instanceof Error ? caughtError.message : "Could not choose the local mirror folder.");
+    } finally {
+      setIsChoosingMirrorFolder(false);
+    }
+  }
+
   function handleThumbnailZoomIndexChange(nextIndex: number): void {
     const clampedIndex = clampNumber(nextIndex, 0, THUMBNAIL_ZOOM_LEVELS.length - 1);
     setThumbnailZoomIndex(clampedIndex);
     const nextPercent = THUMBNAIL_ZOOM_LEVELS[clampedIndex] ?? DEFAULT_THUMBNAIL_ZOOM_PERCENT;
     void persistConfigPatch({ thumbnailZoomPercent: nextPercent });
+  }
+
+  function handleToggleGalleryDisplayMode(): void {
+    setGalleryDisplayMode((current) => {
+      const nextMode = current === "free" ? "square" : "free";
+      void persistConfigPatch({ galleryDisplayMode: nextMode });
+      return nextMode;
+    });
   }
 
   function handleCommitAccentColor(nextValue: string): void {
@@ -1280,6 +1632,10 @@ export function App() {
   }
 
   function handleFileDragEnter(event: DragEvent<HTMLElement>): void {
+    if (!hasExternalFileTransfer(event.dataTransfer)) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current += 1;
@@ -1287,6 +1643,10 @@ export function App() {
   }
 
   function handleFileDragLeave(event: DragEvent<HTMLElement>): void {
+    if (!hasExternalFileTransfer(event.dataTransfer)) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current -= 1;
@@ -1298,6 +1658,10 @@ export function App() {
   }
 
   function handleFileDragOver(event: DragEvent<HTMLElement>): void {
+    if (!hasExternalFileTransfer(event.dataTransfer)) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
 
@@ -1307,6 +1671,10 @@ export function App() {
   }
 
   async function handleFileDrop(event: DragEvent<HTMLElement>): Promise<void> {
+    if (!hasExternalFileTransfer(event.dataTransfer)) {
+      return;
+    }
+
     event.preventDefault();
     event.stopPropagation();
     dragDepthRef.current = 0;
@@ -1317,6 +1685,82 @@ export function App() {
     }
 
     await handleFiles(event.dataTransfer.files);
+  }
+
+  function canDropOnSidebarAlbum(event: DragEvent<HTMLElement>): boolean {
+    return (
+      draggingLibraryItemIdsRef.current.length > 0 ||
+      draggingLibraryItemIds.length > 0 ||
+      hasDataTransferType(event.dataTransfer, DISCASA_LIBRARY_ITEM_DRAG_MIME) ||
+      hasExternalFileTransfer(event.dataTransfer)
+    );
+  }
+
+  function handleSidebarAlbumDragEnter(event: DragEvent<HTMLElement>, albumId: string): void {
+    if (!canDropOnSidebarAlbum(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    nativeDropAlbumIdRef.current = albumId;
+    setSidebarDropAlbumId(albumId);
+  }
+
+  function handleSidebarAlbumDragOver(event: DragEvent<HTMLElement>, albumId: string): void {
+    if (!canDropOnSidebarAlbum(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    nativeDropAlbumIdRef.current = albumId;
+
+    if (sidebarDropAlbumId !== albumId) {
+      setSidebarDropAlbumId(albumId);
+    }
+  }
+
+  function handleSidebarAlbumDragLeave(event: DragEvent<HTMLElement>, albumId: string): void {
+    const relatedTarget = event.relatedTarget instanceof Node ? event.relatedTarget : null;
+
+    if (relatedTarget && event.currentTarget.contains(relatedTarget)) {
+      return;
+    }
+
+    if (nativeDropAlbumIdRef.current === albumId) {
+      nativeDropAlbumIdRef.current = null;
+    }
+
+    setSidebarDropAlbumId((current) => (current === albumId ? null : current));
+  }
+
+  async function handleSidebarAlbumDrop(event: DragEvent<HTMLElement>, albumId: string): Promise<void> {
+    if (!canDropOnSidebarAlbum(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    nativeDropAlbumIdRef.current = null;
+    setSidebarDropAlbumId(null);
+
+    const draggedItemIds = readDraggedLibraryItemIds(event.dataTransfer);
+    const itemIds = draggedItemIds.length ? draggedItemIds : draggingLibraryItemIdsRef.current.length ? draggingLibraryItemIdsRef.current : draggingLibraryItemIds;
+    draggingLibraryItemIdsRef.current = [];
+
+    if (itemIds.length > 0) {
+      await handleAddLibraryItemsToAlbum(albumId, itemIds);
+      return;
+    }
+
+    if (!isTauriRuntime() && event.dataTransfer.files.length > 0) {
+      await handleFiles(event.dataTransfer.files, albumId);
+    }
   }
 
   function handleAlbumContextMenu(event: ReactMouseEvent<HTMLElement>, albumId: string, albumName: string): void {
@@ -1348,6 +1792,11 @@ export function App() {
             onOpenView={openLibraryView}
             onOpenCreateAlbum={openCreateAlbumModal}
             onOpenAlbumContextMenu={handleAlbumContextMenu}
+            dropTargetAlbumId={sidebarDropAlbumId}
+            onAlbumDragEnter={handleSidebarAlbumDragEnter}
+            onAlbumDragLeave={handleSidebarAlbumDragLeave}
+            onAlbumDragOver={handleSidebarAlbumDragOver}
+            onAlbumDrop={handleSidebarAlbumDrop}
           />
 
           <Gallery
@@ -1358,11 +1807,13 @@ export function App() {
             selectedItemIds={selectedItemIds}
             isBusy={isBusy}
             isDraggingFiles={isDraggingFiles}
+            galleryDisplayMode={galleryDisplayMode}
             thumbnailSize={thumbnailSize}
             thumbnailZoomIndex={thumbnailZoomIndex}
             thumbnailZoomLevelCount={THUMBNAIL_ZOOM_LEVELS.length}
             thumbnailZoomPercent={thumbnailZoomPercent}
             onThumbnailZoomIndexChange={handleThumbnailZoomIndexChange}
+            onToggleGalleryDisplayMode={handleToggleGalleryDisplayMode}
             onSelectItem={handleSelectItem}
             onClearSelection={handleClearSelectedItems}
             onApplySelectionRect={handleApplySelectionRect}
@@ -1371,6 +1822,8 @@ export function App() {
             onDragLeave={handleFileDragLeave}
             onDragOver={handleFileDragOver}
             onDrop={handleFileDrop}
+            onStartItemDrag={handleLibraryItemDragStart}
+            onEndItemDrag={handleLibraryItemDragEnd}
             onToggleFavorite={handleToggleFavorite}
             onMoveToTrash={handleMoveToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
@@ -1400,6 +1853,8 @@ export function App() {
           selectedGuildId={selectedGuildId}
           selectedGuildName={selectedGuildName}
           error={authSetupError}
+          localStorageStatus={localStorageStatus}
+          isChoosingMirrorFolder={isChoosingMirrorFolder}
           isLoadingGuilds={isLoadingGuilds}
           isApplyingGuild={isApplyingGuild}
           isCheckingSetup={isCheckingSetup}
@@ -1436,6 +1891,12 @@ export function App() {
           }}
           onApplyGuild={() => {
             void handleApplyGuildFromSetup();
+          }}
+          onChooseLocalMirrorFolder={() => {
+            void handleChooseLocalMirrorFolderFromSetup();
+          }}
+          onUseDefaultLocalMirrorFolder={() => {
+            void commitLocalMirrorSetupPath(null);
           }}
         />
       ) : null}
@@ -1503,10 +1964,19 @@ export function App() {
           minimizeToTray={minimizeToTray}
           closeToTray={closeToTray}
           accentColor={accentColor}
+          localMirrorEnabled={localMirrorEnabled}
+          localMirrorPath={localMirrorPath}
+          localStorageStatus={localStorageStatus}
+          isChoosingMirrorFolder={isChoosingMirrorFolder}
           onClose={() => setIsSettingsOpen(false)}
           onSelectSection={setSettingsSection}
           onChangeMinimizeToTray={handleChangeMinimizeToTray}
           onChangeCloseToTray={handleChangeCloseToTray}
+          onChangeLocalMirrorEnabled={handleChangeLocalMirrorEnabled}
+          onChangeLocalMirrorPath={handleChangeLocalMirrorPath}
+          onChooseLocalMirrorFolder={() => {
+            void handleChooseLocalMirrorFolder();
+          }}
           onCommitAccentColor={handleCommitAccentColor}
         />
       ) : null}
@@ -1645,6 +2115,23 @@ export function UploadIcon() {
       <path d="M12 15.75V6.25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
       <path d="m8.5 9.75 3.5-3.5 3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M5.75 16.25v1a1.5 1.5 0 0 0 1.5 1.5h9.5a1.5 1.5 0 0 0 1.5-1.5v-1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function CloudUploadIcon() {
+  return (
+    <svg viewBox="0 0 64 48" aria-hidden="true">
+      <path
+        d="M18.5 39.5h29.2c7.3 0 13.3-5.4 13.3-12.5 0-6.9-5.5-12.2-12.4-12.5C46.1 7.1 39.4 2.5 31.3 2.5c-8.2 0-15.1 5.6-16.9 13.3C7.9 17.2 3 22.7 3 29.3c0 5.6 4.6 10.2 10.2 10.2h5.3Z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M32 34.5V18" fill="none" stroke="currentColor" strokeWidth="3.6" strokeLinecap="round" />
+      <path d="m23.8 26.2 8.2-8.2 8.2 8.2" fill="none" stroke="currentColor" strokeWidth="3.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -2049,7 +2536,7 @@ export function RenameAlbumModal({
   );
 }
 
-export type AuthSetupStep = "login" | "waiting" | "select-server" | "invite-bot" | "apply-server";
+export type AuthSetupStep = "login" | "waiting" | "select-server" | "invite-bot" | "apply-server" | "local-storage";
 
 type AuthSetupModalProps = {
   step: AuthSetupStep;
@@ -2057,6 +2544,8 @@ type AuthSetupModalProps = {
   selectedGuildId: string;
   selectedGuildName: string | null;
   error: string;
+  localStorageStatus: LocalStorageStatus | null;
+  isChoosingMirrorFolder: boolean;
   isLoadingGuilds: boolean;
   isApplyingGuild: boolean;
   isCheckingSetup: boolean;
@@ -2070,6 +2559,8 @@ type AuthSetupModalProps = {
   onOpenBotInvite: () => void;
   onContinueToApply: () => void;
   onApplyGuild: () => void;
+  onChooseLocalMirrorFolder: () => void;
+  onUseDefaultLocalMirrorFolder: () => void;
 };
 
 function WaitingSpinner() {
@@ -2082,6 +2573,8 @@ export function AuthSetupModal({
   selectedGuildId,
   selectedGuildName,
   error,
+  localStorageStatus,
+  isChoosingMirrorFolder,
   isLoadingGuilds,
   isApplyingGuild,
   isCheckingSetup,
@@ -2095,6 +2588,8 @@ export function AuthSetupModal({
   onOpenBotInvite,
   onContinueToApply,
   onApplyGuild,
+  onChooseLocalMirrorFolder,
+  onUseDefaultLocalMirrorFolder,
 }: AuthSetupModalProps) {
   function renderLoginStep() {
     return (
@@ -2250,7 +2745,7 @@ export function AuthSetupModal({
           <h2>Ready to configure {selectedGuildName ?? "the selected server"}</h2>
           <p>
             Discasa stores your library inside Discord. When you apply it, the app creates a dedicated category and the
-            channels below so your files, folders, trash and settings stay organized in that server.
+            channels below so your files, metadata and trash stay organized in that server.
           </p>
         </div>
 
@@ -2284,6 +2779,54 @@ export function AuthSetupModal({
     );
   }
 
+  function renderLocalStorageStep() {
+    const missingPath = localStorageStatus?.configuredMirrorPath ?? localStorageStatus?.resolvedMirrorPath ?? "";
+    const defaultPath = localStorageStatus?.defaultMirrorPath ?? "Discasa default cache folder";
+
+    return (
+      <>
+        <div className="auth-setup-header">
+          <span className="auth-setup-eyebrow">Local mirror</span>
+          <h2>Choose a folder for this computer</h2>
+          <p>
+            Your Discord settings have local mirroring enabled, but the saved folder was not found on this PC.
+            Choose a new folder or continue with Discasa's default cache folder.
+          </p>
+        </div>
+
+        <div className="auth-setup-storage-card">
+          <span className="auth-setup-storage-label">Saved folder from Discord</span>
+          <strong>{missingPath || "No custom folder saved"}</strong>
+          <span className="auth-setup-storage-label">Default folder</span>
+          <strong>{defaultPath}</strong>
+        </div>
+
+        <span className={`auth-setup-help ${error ? "error" : ""}`}>
+          {error || "This step is skipped automatically when local mirroring is disabled."}
+        </span>
+
+        <div className="auth-setup-actions spaced">
+          <button
+            type="button"
+            className="pill-button secondary-button"
+            onClick={onUseDefaultLocalMirrorFolder}
+            disabled={isApplyingGuild || isChoosingMirrorFolder}
+          >
+            {isApplyingGuild && !isChoosingMirrorFolder ? "Saving..." : "Use default"}
+          </button>
+          <button
+            type="button"
+            className="pill-button accent-button primary-button"
+            onClick={onChooseLocalMirrorFolder}
+            disabled={isApplyingGuild || isChoosingMirrorFolder}
+          >
+            {isChoosingMirrorFolder ? "Choosing..." : "Choose folder"}
+          </button>
+        </div>
+      </>
+    );
+  }
+
   return (
     <BaseModal
       rootClassName="auth-setup-modal-root"
@@ -2297,6 +2840,7 @@ export function AuthSetupModal({
         {step === "select-server" ? renderServerSelectStep() : null}
         {step === "invite-bot" ? renderInviteBotStep() : null}
         {step === "apply-server" ? renderApplyStep() : null}
+        {step === "local-storage" ? renderLocalStorageStep() : null}
       </div>
     </BaseModal>
   );
@@ -2565,11 +3109,13 @@ type GalleryProps = {
   selectedItemIds: string[];
   isBusy: boolean;
   isDraggingFiles: boolean;
+  galleryDisplayMode: GalleryDisplayMode;
   thumbnailSize: number;
   thumbnailZoomIndex: number;
   thumbnailZoomLevelCount: number;
   thumbnailZoomPercent: number;
   onThumbnailZoomIndexChange: (nextIndex: number) => void;
+  onToggleGalleryDisplayMode: () => void;
   onSelectItem: (itemId: string, options: { range: boolean; toggle: boolean }) => void;
   onClearSelection: () => void;
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
@@ -2578,6 +3124,8 @@ type GalleryProps = {
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   onDragOver: (event: DragEvent<HTMLElement>) => void;
   onDrop: (event: DragEvent<HTMLElement>) => Promise<void>;
+  onStartItemDrag: (event: DragEvent<HTMLElement>, itemId: string) => void;
+  onEndItemDrag: () => void;
   onToggleFavorite: (itemId: string) => Promise<void>;
   onMoveToTrash: (itemId: string) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
@@ -2625,6 +3173,8 @@ type GalleryGridProps = {
   onClearSelection: () => void;
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
   renderItemActions: (item: LibraryItem) => ReactNode;
+  onStartItemDrag: (event: DragEvent<HTMLElement>, itemId: string) => void;
+  onEndItemDrag: () => void;
   onRequestUpload: () => void;
 };
 
@@ -2635,6 +3185,8 @@ type GalleryItemProps = {
   actions: ReactNode;
   onClick: (event: ReactMouseEvent<HTMLElement>, itemId: string) => void;
   onDoubleClick: (itemId: string) => void;
+  onDragStart: (event: DragEvent<HTMLElement>, itemId: string) => void;
+  onDragEnd: () => void;
   onRegisterElement: (itemId: string, element: HTMLElement | null) => void;
 };
 
@@ -2753,6 +3305,43 @@ function getFallbackLabel(item: LibraryItem): string {
   }
 
   return item.mimeType.split("/")[0]?.toUpperCase() || "FILE";
+}
+
+function createLibraryItemDragPreview(items: LibraryItem[]): HTMLElement {
+  const preview = document.createElement("div");
+  preview.className = "drag-stack-preview";
+
+  const visibleItems = items.slice(0, 4);
+
+  visibleItems.forEach((item, index) => {
+    const tile = document.createElement("div");
+    tile.className = "drag-stack-preview-tile";
+    tile.style.setProperty("--stack-index", String(index));
+    const previewUrl = getLibraryItemThumbnailUrl(item);
+
+    if (isImage(item) && item.attachmentStatus !== "missing" && !previewUrl.startsWith("mock://")) {
+      const image = document.createElement("img");
+      image.src = previewUrl;
+      image.alt = "";
+      tile.appendChild(image);
+    } else {
+      const extension = document.createElement("span");
+      extension.textContent = getFileExtension(item.name);
+      tile.appendChild(extension);
+    }
+
+    preview.appendChild(tile);
+  });
+
+  if (items.length > 1) {
+    const count = document.createElement("span");
+    count.className = "drag-stack-preview-count";
+    count.textContent = String(items.length);
+    preview.appendChild(count);
+  }
+
+  document.body.appendChild(preview);
+  return preview;
 }
 
 function formatVideoDuration(seconds: number): string {
@@ -2875,6 +3464,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   const [mediaAspectRatio, setMediaAspectRatio] = useState<number | null>(null);
   const [videoDuration, setVideoDuration] = useState<string>("");
 
+  const previewUrl = getLibraryItemThumbnailUrl(item);
   const extension = useMemo(() => getFileExtension(item.name), [item.name]);
   const fallbackLabel = useMemo(() => getFallbackLabel(item), [item]);
   const canRenderImage = isImage(item) && !hasPreviewError;
@@ -2904,12 +3494,12 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
       }
     };
 
-    image.src = item.attachmentUrl;
+    image.src = previewUrl;
 
     return () => {
       isDisposed = true;
     };
-  }, [canRenderImage, displayMode, item.attachmentUrl]);
+  }, [canRenderImage, displayMode, previewUrl]);
 
   const previewAspectRatio =
     displayMode === "square"
@@ -2922,7 +3512,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
         {canRenderImage ? (
           <>
             <img
-              src={item.attachmentUrl}
+              src={previewUrl}
               alt={item.name}
               loading="lazy"
               draggable={false}
@@ -2940,7 +3530,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
         {canRenderVideo ? (
           <>
             <video
-              src={item.attachmentUrl}
+              src={previewUrl}
               preload="metadata"
               muted
               playsInline
@@ -2980,14 +3570,27 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   );
 }
 
-function GalleryItem({ item, isSelected, displayMode, actions, onClick, onDoubleClick, onRegisterElement }: GalleryItemProps) {
+function GalleryItem({
+  item,
+  isSelected,
+  displayMode,
+  actions,
+  onClick,
+  onDoubleClick,
+  onDragStart,
+  onDragEnd,
+  onRegisterElement,
+}: GalleryItemProps) {
   return (
     <article
       ref={(element) => onRegisterElement(item.id, element)}
       className={`file-tile mode-${displayMode} ${isSelected ? "selected" : ""}`}
       title={item.name}
+      draggable={!item.isTrashed}
       onClick={(event) => onClick(event, item.id)}
       onDoubleClick={() => onDoubleClick(item.id)}
+      onDragStart={(event) => onDragStart(event, item.id)}
+      onDragEnd={onDragEnd}
     >
       <FileThumbnail item={item} displayMode={displayMode} actions={actions} />
       <div className="file-meta compact">
@@ -3009,6 +3612,8 @@ function GalleryGrid({
   onClearSelection,
   onApplySelectionRect,
   renderItemActions,
+  onStartItemDrag,
+  onEndItemDrag,
   onRequestUpload,
 }: GalleryGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
@@ -3074,7 +3679,14 @@ function GalleryGrid({
   }
 
   function handleGridPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (event.button !== 0 || event.target !== event.currentTarget || items.length === 0) {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+
+    if (
+      event.button !== 0 ||
+      target?.closest(".file-tile") ||
+      target?.closest(".empty-state") ||
+      items.length === 0
+    ) {
       return;
     }
 
@@ -3160,6 +3772,8 @@ function GalleryGrid({
           actions={renderItemActions(item)}
           onClick={handleItemClick}
           onDoubleClick={handleItemDoubleClick}
+          onDragStart={onStartItemDrag}
+          onDragEnd={onEndItemDrag}
           onRegisterElement={setItemElement}
         />
       ))}
@@ -3179,6 +3793,9 @@ function GalleryGrid({
 
       {items.length === 0 && !isBusy ? (
         <button type="button" className="empty-state" onClick={onRequestUpload}>
+          <span className="drop-illustration">
+            <CloudUploadIcon />
+          </span>
           <span className="empty-state-title">No files yet.</span>
           <span className="empty-state-copy">Drag files from Explorer into this area or click the upload button to add files.</span>
         </button>
@@ -3196,11 +3813,13 @@ export function Gallery({
   selectedItemIds,
   isBusy,
   isDraggingFiles,
+  galleryDisplayMode,
   thumbnailSize,
   thumbnailZoomIndex,
   thumbnailZoomLevelCount,
   thumbnailZoomPercent,
   onThumbnailZoomIndexChange,
+  onToggleGalleryDisplayMode,
   onSelectItem,
   onClearSelection,
   onApplySelectionRect,
@@ -3209,6 +3828,8 @@ export function Gallery({
   onDragLeave,
   onDragOver,
   onDrop,
+  onStartItemDrag,
+  onEndItemDrag,
   onToggleFavorite,
   onMoveToTrash,
   onRestoreFromTrash,
@@ -3216,7 +3837,6 @@ export function Gallery({
   onRestoreMediaEdit,
   onDeleteItem,
 }: GalleryProps) {
-  const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>("free");
   const [viewerState, setViewerState] = useState<ViewerState>(null);
   const [viewerWheelBehavior, setViewerWheelBehavior] = useState<MouseWheelBehavior>(() => readStoredMouseWheelBehavior());
   const [viewerDraftState, setViewerDraftState] = useState<ViewerDraftState>(() => createViewerDraftStateFromItem(null));
@@ -3571,9 +4191,7 @@ export function Gallery({
           thumbnailZoomProgress={thumbnailZoomProgress}
           bulkActions={bulkActions}
           onThumbnailZoomIndexChange={onThumbnailZoomIndexChange}
-          onToggleGalleryDisplayMode={() => {
-            setGalleryDisplayMode((current) => (current === "free" ? "square" : "free"));
-          }}
+          onToggleGalleryDisplayMode={onToggleGalleryDisplayMode}
           onRequestUpload={onRequestUpload}
         />
       </div>
@@ -3588,12 +4206,17 @@ export function Gallery({
         onOpenItem={handleOpenViewer}
         onClearSelection={onClearSelection}
         onApplySelectionRect={onApplySelectionRect}
+        onStartItemDrag={onStartItemDrag}
+        onEndItemDrag={onEndItemDrag}
         onRequestUpload={onRequestUpload}
         renderItemActions={renderThumbnailActions}
       />
 
       {isDraggingFiles ? (
         <div className="drop-overlay">
+          <span className="drop-illustration">
+            <CloudUploadIcon />
+          </span>
           <span className="drop-overlay-title">Drop files here</span>
           <span className="drop-overlay-copy">They will be added to the current view.</span>
         </div>
@@ -3880,6 +4503,8 @@ export function MediaViewerModal({
     return null;
   }
 
+  const mediaUrl = getLibraryItemContentUrl(item);
+
   return (
     <div className="media-viewer-root" role="dialog" aria-modal="true" aria-label={`Viewer for ${item.name}`}>
       <button type="button" className="media-viewer-backdrop" aria-label="Close viewer" onClick={onClose} />
@@ -3923,7 +4548,7 @@ export function MediaViewerModal({
           >
             {imageMode ? (
               <img
-                src={item.attachmentUrl}
+                src={mediaUrl}
                 alt={item.name}
                 className="media-viewer-image"
                 draggable={false}
@@ -3936,7 +4561,7 @@ export function MediaViewerModal({
 
             {videoMode ? (
               <video
-                src={item.attachmentUrl}
+                src={mediaUrl}
                 className="media-viewer-video"
                 controls
                 playsInline
@@ -4094,16 +4719,24 @@ type SettingsModalProps = {
   minimizeToTray: boolean;
   closeToTray: boolean;
   accentColor: string;
+  localMirrorEnabled: boolean;
+  localMirrorPath: string;
+  localStorageStatus: LocalStorageStatus | null;
+  isChoosingMirrorFolder: boolean;
   onClose: () => void;
   onSelectSection: (section: SettingsSection) => void;
   onChangeMinimizeToTray: (checked: boolean) => void;
   onChangeCloseToTray: (checked: boolean) => void;
+  onChangeLocalMirrorEnabled: (checked: boolean) => void;
+  onChangeLocalMirrorPath: (value: string) => void;
+  onChooseLocalMirrorFolder: () => void;
   onCommitAccentColor: (value: string) => void;
 };
 
 const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "discord", label: "Discord" },
   { id: "appearance", label: "Appearance" },
+  { id: "storage", label: "Storage" },
   { id: "window", label: "Window" },
 ];
 
@@ -4422,15 +5055,27 @@ export function SettingsModal({
   minimizeToTray,
   closeToTray,
   accentColor,
+  localMirrorEnabled,
+  localMirrorPath,
+  localStorageStatus,
+  isChoosingMirrorFolder,
   onClose,
   onSelectSection,
   onChangeMinimizeToTray,
   onChangeCloseToTray,
+  onChangeLocalMirrorEnabled,
+  onChangeLocalMirrorPath,
+  onChooseLocalMirrorFolder,
   onCommitAccentColor,
 }: SettingsModalProps) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
   const [mouseWheelBehavior, setMouseWheelBehavior] = useState(() => readStoredMouseWheelBehavior());
+  const [localMirrorPathDraft, setLocalMirrorPathDraft] = useState(localMirrorPath);
+
+  useEffect(() => {
+    setLocalMirrorPathDraft(localMirrorPath);
+  }, [localMirrorPath]);
 
   async function handleLogout(): Promise<void> {
     setIsLoggingOut(true);
@@ -4448,6 +5093,39 @@ export function SettingsModal({
   function handleChangeMouseWheelBehavior(nextValue: "zoom" | "navigate"): void {
     setMouseWheelBehavior(nextValue);
     commitMouseWheelBehavior(nextValue);
+  }
+
+  function commitLocalMirrorPathDraft(): void {
+    const trimmedPath = localMirrorPathDraft.trim();
+    setLocalMirrorPathDraft(trimmedPath);
+    onChangeLocalMirrorPath(trimmedPath);
+  }
+
+  function handleLocalMirrorPathKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitLocalMirrorPathDraft();
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setLocalMirrorPathDraft(localMirrorPath);
+      event.currentTarget.blur();
+    }
+  }
+
+  function formatStorageBytes(value: number): string {
+    if (value < 1024) {
+      return `${value} B`;
+    }
+
+    if (value < 1024 * 1024) {
+      return `${(value / 1024).toFixed(1)} KB`;
+    }
+
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   }
 
   function renderDiscordContent() {
@@ -4500,6 +5178,99 @@ export function SettingsModal({
     );
   }
 
+  function renderStorageContent() {
+    const resolvedMirrorPath = (localStorageStatus?.resolvedMirrorPath ?? localMirrorPath) || "Default cache folder";
+    const defaultMirrorPath = localStorageStatus?.defaultMirrorPath ?? "Default cache folder";
+    const thumbnailCachePath = localStorageStatus?.thumbnailCachePath ?? "Temporary thumbnail cache";
+    const mirroredFileCount = localStorageStatus ? bytesFormatter.format(localStorageStatus.mirroredFileCount) : "0";
+    const thumbnailCacheLabel = localStorageStatus
+      ? `${bytesFormatter.format(localStorageStatus.thumbnailCacheFileCount)} files, ${formatStorageBytes(localStorageStatus.thumbnailCacheBytes)}`
+      : "Waiting for cache status";
+
+    return (
+      <>
+        <div className="settings-modal-header">
+          <div>
+            <h2>Storage</h2>
+            <p>Choose whether Discasa keeps local copies alongside the Discord cloud library.</p>
+          </div>
+        </div>
+
+        <div className="settings-card panel-surface-secondary">
+          <label className="settings-toggle" htmlFor="local-mirror-enabled">
+            <div className="settings-toggle-copy">
+              <span className="settings-toggle-title">Mirror files locally</span>
+              <span className="settings-toggle-description">
+                Keep managed copies on this computer while Discord remains the cloud source.
+              </span>
+            </div>
+            <input
+              id="local-mirror-enabled"
+              className="settings-switch-input"
+              type="checkbox"
+              checked={localMirrorEnabled}
+              onChange={(event) => onChangeLocalMirrorEnabled(event.currentTarget.checked)}
+            />
+            <span className="settings-switch" aria-hidden="true" />
+          </label>
+
+          <div className="settings-field-stack">
+            <label className="settings-input-label" htmlFor="local-mirror-path">
+              Local mirror folder
+            </label>
+            <div className="settings-path-row">
+              <input
+                id="local-mirror-path"
+                className="form-text-input settings-path-input"
+                type="text"
+                spellCheck={false}
+                value={localMirrorPathDraft}
+                placeholder={defaultMirrorPath}
+                onChange={(event) => setLocalMirrorPathDraft(event.currentTarget.value)}
+                onBlur={commitLocalMirrorPathDraft}
+                onKeyDown={handleLocalMirrorPathKeyDown}
+              />
+              <button
+                type="button"
+                className="pill-button secondary-button settings-path-button"
+                onClick={onChooseLocalMirrorFolder}
+                disabled={isChoosingMirrorFolder}
+              >
+                {isChoosingMirrorFolder ? "Choosing..." : "Choose"}
+              </button>
+              <button
+                type="button"
+                className="pill-button secondary-button settings-path-button"
+                onClick={() => {
+                  setLocalMirrorPathDraft("");
+                  onChangeLocalMirrorPath("");
+                }}
+              >
+                Default
+              </button>
+            </div>
+            <span className="settings-input-help">Active folder: {resolvedMirrorPath}</span>
+          </div>
+
+          <div className="settings-storage-grid" aria-label="Local storage status">
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Mirrored files</span>
+              <strong>{mirroredFileCount}</strong>
+            </div>
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Thumbnail cache</span>
+              <strong>{thumbnailCacheLabel}</strong>
+            </div>
+            <div className="settings-storage-stat wide">
+              <span className="settings-storage-stat-label">Cache folder</span>
+              <strong>{thumbnailCachePath}</strong>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   function renderContent() {
     if (settingsSection === "discord") {
       return renderDiscordContent();
@@ -4520,6 +5291,10 @@ export function SettingsModal({
           </div>
         </>
       );
+    }
+
+    if (settingsSection === "storage") {
+      return renderStorageContent();
     }
 
     return (
@@ -4651,6 +5426,11 @@ type SidebarProps = {
   onOpenView: (view: SidebarView) => void;
   onOpenCreateAlbum: () => void;
   onOpenAlbumContextMenu: (event: ReactMouseEvent<HTMLElement>, albumId: string, albumName: string) => void;
+  dropTargetAlbumId: string | null;
+  onAlbumDragEnter: (event: DragEvent<HTMLElement>, albumId: string) => void;
+  onAlbumDragLeave: (event: DragEvent<HTMLElement>, albumId: string) => void;
+  onAlbumDragOver: (event: DragEvent<HTMLElement>, albumId: string) => void;
+  onAlbumDrop: (event: DragEvent<HTMLElement>, albumId: string) => Promise<void>;
 };
 
 export function Sidebar({
@@ -4662,6 +5442,11 @@ export function Sidebar({
   onOpenView,
   onOpenCreateAlbum,
   onOpenAlbumContextMenu,
+  dropTargetAlbumId,
+  onAlbumDragEnter,
+  onAlbumDragLeave,
+  onAlbumDragOver,
+  onAlbumDrop,
 }: SidebarProps) {
   return (
     <aside className={`sidebar-panel panel-surface ${isSidebarCollapsed ? "collapsed" : ""}`}>
@@ -4719,9 +5504,16 @@ export function Sidebar({
             <button
               key={album.id}
               type="button"
-              className={`sidebar-item ${selectedView.kind === "album" && selectedView.id === album.id ? "selected" : ""}`}
+              className={`sidebar-item ${selectedView.kind === "album" && selectedView.id === album.id ? "selected" : ""} ${dropTargetAlbumId === album.id ? "album-drop-target" : ""}`}
+              data-album-drop-id={album.id}
               onClick={() => onOpenView({ kind: "album", id: album.id })}
               onContextMenu={(event) => onOpenAlbumContextMenu(event, album.id, album.name)}
+              onDragEnter={(event) => onAlbumDragEnter(event, album.id)}
+              onDragLeave={(event) => onAlbumDragLeave(event, album.id)}
+              onDragOver={(event) => onAlbumDragOver(event, album.id)}
+              onDrop={(event) => {
+                void onAlbumDrop(event, album.id);
+              }}
               title={album.name}
             >
               <span className="sidebar-item-icon"><FolderIcon /></span>

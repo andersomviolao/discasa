@@ -1,85 +1,88 @@
 # Discasa
 
-Discasa is a desktop-first file and media library project built around a simple idea: using Discord infrastructure as a storage and synchronization layer while delivering a native desktop experience through a custom application interface.
+Discasa is a desktop-first file and media library project. It uses Discord as the cloud storage and synchronization layer while presenting files through a native desktop interface.
 
-This repository is currently in an active internal prototype stage. The project is not packaged or presented yet as a public end-user release, so this README intentionally focuses on architecture, implemented scope, and direction rather than public usage instructions.
+This repository is still an internal prototype, so this README focuses on the current architecture, runtime behavior, and development workflow.
 
-## Project status
+## Project Status
 
-Discasa is already beyond the initial scaffold phase.
+Discasa currently includes:
 
-At the current stage, the repository contains:
+- a Tauri desktop shell with a React interface
+- a local Node.js backend for Discord OAuth, guild setup, uploads, and synchronization
+- a shared package for cross-layer types and snapshot contracts
+- mock mode support for UI and flow development
+- Discord-backed persistence for files, folders, trash, and app configuration
+- local cache and optional local file mirroring
 
-- a desktop application shell with a custom interface built on Tauri
-- a local backend responsible for Discord OAuth, guild inspection, bot/application flow, uploads, and state synchronization
-- a shared package for cross-layer types and constants
-- mock mode support for UI and flow development without requiring the full Discord setup
-- a Discord-backed persistence model for files, index snapshots, folder snapshots, trash handling, and app configuration
-
-## Core idea
-
-The long-term goal of Discasa is to behave like a personal desktop drive/library interface while using a Discord server as the backing environment for storage-related operations.
-
-Instead of exposing Discord concepts directly as the user experience, the app builds its own desktop-oriented layer on top of them:
-
-- files are presented as library items
-- albums/folders are managed as Discasa metadata
-- UI preferences can be persisted as part of the Discasa state
-- Discord channels are treated as infrastructure, not as the product interface itself
-
-## Current architecture
+## Architecture
 
 ```text
 apps/
   desktop/   # Tauri + React desktop application
-  server/    # Local Node.js service for OAuth, Discord orchestration and persistence sync
+  server/    # Local Node.js service for OAuth, Discord orchestration, and persistence
 packages/
-  shared/    # Shared types, constants and snapshot contracts
+  shared/    # Shared types, constants, and snapshot contracts
 art/         # Visual/project assets
-docs/        # Internal documentation and architecture notes
 ```
 
-## Discord storage model
+## Discord Storage Model
 
-When Discasa is applied to a server, the project currently works with the following structure:
+When Discasa is applied to a server, it creates or reuses this structure:
 
-- `Discasa` — category used by the project
-- `discasa-drive` — uploaded files and active file storage
-- `discasa-index` — item index snapshots and library state
-- `discasa-folder` — folder/album structure and item membership snapshots
-- `discasa-trash` — trash storage flow for removed items
-- `discasa-config` — persisted app configuration snapshots
+- `Discasa` - category used by the project
+- `discasa-drive` - uploaded files and active file storage
+- `discasa-index` - library index, folder membership, and app configuration snapshots
+- `discasa-trash` - trash storage flow for removed items
 
-This separation reflects the current direction of the project: keeping file storage, organization metadata, and UI/app state as distinct layers.
+Older Discasa setups may still contain legacy `discasa-folder` and `discasa-config` channels. The backend keeps migration/recovery handling for those channels, but new setup uses the three-channel model above.
 
-## What already exists in the codebase
+## Local Runtime Storage
 
-The repository already includes working pieces for the following areas:
+On Windows, runtime data is stored outside the project folder so the app can work correctly after being packaged with an installer:
 
-### Desktop experience
+```text
+%APPDATA%\Discasa
+  auth.json
+  mock-db.json
+
+%LOCALAPPDATA%\Discasa\Cache
+  files\
+  thumbnails\
+```
+
+`%APPDATA%\Discasa` is used for local auth/session state and runtime metadata. `%LOCALAPPDATA%\Discasa\Cache` is used for temporary files, thumbnails, and the default local mirror folder.
+
+If a user chooses a custom local mirror folder, Discasa stores that chosen path in the Discord-backed app config. On a new PC, if local mirroring is enabled and the saved folder does not exist, the setup flow asks the user to choose a new folder or use the default Discasa cache folder. If local mirroring is disabled, that setup step is skipped.
+
+The server still recognizes the old prototype folder at `apps\server\.discasa-data` and copies compatible data into the new AppData locations on startup when the new files do not exist.
+
+## Implemented Areas
+
+### Desktop Experience
 
 - custom titlebar and window controls
-- desktop UI built around a library/grid workflow
-- sidebar-driven navigation
-- settings modal and status feedback/toast flow
+- desktop library/grid workflow
+- sidebar navigation
+- settings modal and status/toast feedback
 - thumbnail zoom handling
+- gallery display mode persistence
 - accent color and UI preference persistence
 - minimize-to-tray and close-to-tray behavior
 - native file drag and drop handling through Tauri
 
-### Library and organization flow
+### Library And Organization Flow
 
-- file upload flow through the local backend
-- album creation
-- album rename
-- album reorder
-- album deletion
+- file upload through the local backend
+- album creation, rename, reorder, and deletion
+- multi-select and drag-to-folder interactions
 - favorites support
-- trash / restore flow
-- permanent delete flow
-- saved image edit metadata support (such as rotation/crop state persistence)
+- trash, restore, and permanent delete flows
+- saved image edit metadata support, including crop mode and rotation state
+- cached thumbnails for faster interface loading
+- optional local file mirroring
 
-### Discord integration flow
+### Discord Integration Flow
 
 - Discord login flow
 - eligible server listing
@@ -87,58 +90,34 @@ The repository already includes working pieces for the following areas:
 - bot invite/apply flow
 - Discasa initialization inside the selected guild
 - upload size validation against Discord limits
-- synchronization of index, folder, and config snapshots back to Discord channels
+- synchronization of index, folder, trash, and app config snapshots back to Discord
 
-### Local development support
+### Local Development Support
 
 - mock mode for disconnected development
-- persisted local data for development/runtime state
-- migration path for legacy media edit data
-- Windows batch launcher for the current development workflow
+- persisted local runtime data
+- migration path for legacy metadata and storage layouts
+- Windows batch launcher for the development workflow
+- hard reset script for clearing generated artifacts and local Discasa app data
 
-## Platforms and technologies in use
+## Development Scripts
 
-### Runtime targets
+- `start-discasa.bat` starts the backend and Tauri desktop app for local development.
+- `start-discasa-hard-reset.bat` removes generated development artifacts, current AppData runtime folders, legacy Tauri folders, and legacy prototype storage.
 
-- desktop application via **Tauri 2**
-- local companion backend via **Node.js**
-- Discord as the current storage/orchestration backbone
+The hard reset script does not delete Discord server channels or cloud snapshots.
 
-### Main technologies
+## Main Technologies
 
-- **TypeScript**
-- **React 19**
-- **Vite**
-- **Node.js + Express**
-- **discord.js**
-- **Rust** (Tauri shell/runtime)
-- **CSS** for the current interface styling
+- TypeScript
+- React 19
+- Vite
+- Tauri 2
+- Node.js + Express
+- discord.js
+- Rust
+- CSS
 
-### Repository language mix
+## Direction
 
-The repository is currently composed primarily of TypeScript, with CSS and Rust also playing visible roles. There are also smaller supporting scripts/assets in other languages and formats as the project evolves.
-
-## Design priorities at this stage
-
-At the current stage, the codebase shows a strong emphasis on:
-
-- desktop-first UX
-- local responsiveness
-- Discord-backed persistence experiments
-- internal consistency between UI state and stored snapshots
-- gradual evolution from a prototype scaffold into a more complete product foundation
-
-## Near- to mid-term direction
-
-The next stages of Discasa are likely to deepen and harden the product in areas such as:
-
-- richer media preview and editing workflows
-- stronger synchronization and recovery logic between local state and Discord-backed snapshots
-- broader organization and library management features
-- more robust metadata handling and search-oriented workflows
-- packaging, stability, and release hardening for broader distribution
-- clearer operational boundaries between desktop client, local backend, and Discord services
-
-## Notes
-
-This repository is being shaped as an evolving product foundation rather than a finished public release. Because of that, the README intentionally does not describe public setup or end-user installation steps yet.
+Discasa is evolving from a prototype into a more complete desktop library product. The next areas of hardening are synchronization recovery, metadata/search workflows, richer preview and editing behavior, installer packaging, and clearer boundaries between the desktop client, local backend, and Discord services.

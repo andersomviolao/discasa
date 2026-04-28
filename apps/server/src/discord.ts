@@ -22,8 +22,8 @@ import {
   type GuildTextBasedChannel,
   type OverwriteResolvable,
 } from "discord.js";
-import type { ActiveStorageContext, UploadedFileRecord } from "../lib/store";
-import { env } from "../lib/env";
+import { env } from "./config";
+import type { ActiveStorageContext, UploadedFileRecord } from "./persistence";
 
 type DiscordUserGuild = {
   id: string;
@@ -31,6 +31,23 @@ type DiscordUserGuild = {
   owner: boolean;
   permissions: string;
 };
+
+export class DiscordAuthorizationError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "DiscordAuthorizationError";
+  }
+}
+
+export class DiscordStorageUnavailableError extends Error {
+  constructor(readonly channelId: string) {
+    super(`Discasa storage channel is not available: ${channelId}`);
+    this.name = "DiscordStorageUnavailableError";
+  }
+}
 
 type LegacyPersistedAlbum = {
   id: string;
@@ -84,7 +101,80 @@ const LEGACY_INDEX_SNAPSHOT_FILENAME = "discasa-index.json";
 const FOLDER_SNAPSHOT_FILENAME = "discasa-folder.snapshot.json";
 const CONFIG_SNAPSHOT_FILENAME = "discasa-config.snapshot.json";
 const INSTALL_MARKER_FILENAME = "discasa-install.marker.json";
+const LEGACY_FOLDER_CHANNEL_NAME = "discasa-folder";
+const LEGACY_CONFIG_CHANNEL_NAME = "discasa-config";
+const DEFAULT_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
+const LEVEL_TWO_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
+const LEVEL_THREE_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 let botClient: Client | null = null;
+
+type DiscordGuildMetadata = {
+  premium_tier?: number;
+};
+
+function formatBytes(value: number): string {
+  const megabytes = value / (1024 * 1024);
+
+  if (megabytes >= 100) {
+    return `${Math.round(megabytes)} MB`;
+  }
+
+  return `${megabytes.toFixed(1)} MB`;
+}
+
+function getUploadLimitFromPremiumTier(premiumTier: number): number {
+  if (premiumTier >= 3) {
+    return LEVEL_THREE_UPLOAD_LIMIT_BYTES;
+  }
+
+  if (premiumTier >= 2) {
+    return LEVEL_TWO_UPLOAD_LIMIT_BYTES;
+  }
+
+  return DEFAULT_UPLOAD_LIMIT_BYTES;
+}
+
+export async function getDiscordUploadLimitForGuild(guildId: string): Promise<number> {
+  if (env.mockMode || !env.discordBotToken) {
+    return DEFAULT_UPLOAD_LIMIT_BYTES;
+  }
+
+  try {
+    const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
+      headers: {
+        Authorization: `Bot ${env.discordBotToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      console.error("[Discord API] Failed to fetch guild metadata for upload limit.", {
+        guildId,
+        status: response.status,
+        statusText: response.statusText,
+      });
+      return DEFAULT_UPLOAD_LIMIT_BYTES;
+    }
+
+    const payload = (await response.json()) as DiscordGuildMetadata;
+    const premiumTier = typeof payload.premium_tier === "number" ? payload.premium_tier : 0;
+    return getUploadLimitFromPremiumTier(premiumTier);
+  } catch (error) {
+    console.error("[Discord API] Could not resolve guild upload limit.", {
+      guildId,
+      error,
+    });
+    return DEFAULT_UPLOAD_LIMIT_BYTES;
+  }
+}
+
+export function getUploadTooLargeMessage(
+  files: Array<{ originalname: string; size: number }>,
+  uploadLimitBytes: number,
+): string {
+  const fileList = files.map((file) => `${file.originalname} (${formatBytes(file.size)})`).join(", ");
+
+  return `File too large for Discord on this server. Limit: ${formatBytes(uploadLimitBytes)}. Rejected: ${fileList}.`;
+}
 
 async function getBotClient(): Promise<Client | null> {
   if (env.mockMode || !env.discordBotToken) {
@@ -129,12 +219,19 @@ async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserG
   }
 
   if (!response.ok) {
-    console.error("[Discord API] Failed to fetch user guilds.", {
+    const logPayload = {
       endpoint,
       status: response.status,
       statusText: response.statusText,
       body: parsedBody,
-    });
+    };
+
+    if (response.status === 401 || response.status === 403) {
+      console.warn("[Discord API] Stored Discord user token is no longer valid.", logPayload);
+      throw new DiscordAuthorizationError("Discord login expired. Please login again.", response.status);
+    }
+
+    console.error("[Discord API] Failed to fetch user guilds.", logPayload);
 
     throw new Error(
       `Failed to fetch the user guild list from Discord (${response.status} ${response.statusText}).`,
@@ -234,10 +331,16 @@ async function getGuildTextChannel(channelId: string): Promise<GuildTextBasedCha
     throw new Error("Bot client is not configured.");
   }
 
-  const channel = await client.channels.fetch(channelId);
+  let channel: Awaited<ReturnType<Client["channels"]["fetch"]>>;
+
+  try {
+    channel = await client.channels.fetch(channelId);
+  } catch {
+    throw new DiscordStorageUnavailableError(channelId);
+  }
 
   if (!channel || !channel.isTextBased() || !("send" in channel) || !("messages" in channel)) {
-    throw new Error("Discasa storage channel is not available.");
+    throw new DiscordStorageUnavailableError(channelId);
   }
 
   return channel as GuildTextBasedChannel;
@@ -399,11 +502,22 @@ async function findMessageForItem(
   ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
   for (const channelId of candidateChannelIds) {
-    const locatedAttachment = await findAttachmentInChannelHistory(channelId, {
-      preferredFileName: item.name,
-      currentAttachmentUrl: item.attachmentUrl,
-      botUserId,
-    });
+    let locatedAttachment: StoredAttachmentPointer | null = null;
+
+    try {
+      locatedAttachment = await findAttachmentInChannelHistory(channelId, {
+        preferredFileName: item.name,
+        currentAttachmentUrl: item.attachmentUrl,
+        botUserId,
+      });
+    } catch (error) {
+      if (error instanceof DiscordStorageUnavailableError) {
+        console.warn(`[Discasa recovery] Skipping unavailable storage channel ${channelId} while relinking "${item.name}".`);
+        continue;
+      }
+
+      throw error;
+    }
 
     if (!locatedAttachment) {
       continue;
@@ -610,7 +724,21 @@ async function readSnapshotMessage(
 }
 
 async function readJsonSnapshot(channelId: string, fileNames: string[]): Promise<{ payload: unknown; fileName: string } | null> {
-  const found = await readSnapshotMessage(channelId, fileNames);
+  let found: { attachmentUrl: string; fileName: string } | null = null;
+
+  try {
+    found = await readSnapshotMessage(channelId, fileNames);
+  } catch (error) {
+    if (error instanceof DiscordStorageUnavailableError) {
+      console.warn(
+        `[Discasa snapshot] Channel ${channelId} is unavailable while looking for ${fileNames.join(", ")}.`,
+      );
+      return null;
+    }
+
+    throw error;
+  }
+
   if (!found) {
     return null;
   }
@@ -646,6 +774,7 @@ async function readInstallMarker(channelId: string): Promise<DiscasaInstallMarke
 function resolveDiscasaStructure(guild: Guild): {
   category: any | null;
   channels: Map<string, { id: string; name: string }>;
+  legacyChannels: Map<string, { id: string; name: string }>;
   missingChannels: string[];
 } {
   const category = guild.channels.cache.find(
@@ -653,6 +782,7 @@ function resolveDiscasaStructure(guild: Guild): {
   );
 
   const channels = new Map<string, { id: string; name: string }>();
+  const legacyChannels = new Map<string, { id: string; name: string }>();
 
   if (category) {
     for (const channelName of DISCASA_CHANNELS) {
@@ -670,6 +800,22 @@ function resolveDiscasaStructure(guild: Guild): {
         });
       }
     }
+
+    for (const channelName of [LEGACY_FOLDER_CHANNEL_NAME, LEGACY_CONFIG_CHANNEL_NAME]) {
+      const matchedChannel = guild.channels.cache.find(
+        (channel) =>
+          channel.type === ChannelType.GuildText &&
+          channel.parentId === category.id &&
+          channel.name === channelName,
+      );
+
+      if (matchedChannel) {
+        legacyChannels.set(channelName, {
+          id: matchedChannel.id,
+          name: matchedChannel.name,
+        });
+      }
+    }
   }
 
   const missingChannels = DISCASA_CHANNELS.filter((channelName) => !channels.has(channelName));
@@ -677,6 +823,7 @@ function resolveDiscasaStructure(guild: Guild): {
   return {
     category,
     channels,
+    legacyChannels,
     missingChannels,
   };
 }
@@ -688,11 +835,9 @@ function buildActiveStorageContext(
 ): ActiveStorageContext {
   const driveChannel = channels.get(DISCASA_CHANNELS[0]);
   const indexChannel = channels.get(DISCASA_CHANNELS[1]);
-  const folderChannel = channels.get(DISCASA_CHANNELS[2]);
-  const trashChannel = channels.get(DISCASA_CHANNELS[3]);
-  const configChannel = channels.get(DISCASA_CHANNELS[4]);
+  const trashChannel = channels.get(DISCASA_CHANNELS[2]);
 
-  if (!driveChannel || !indexChannel || !folderChannel || !trashChannel || !configChannel) {
+  if (!driveChannel || !indexChannel || !trashChannel) {
     throw new Error("Discasa storage channels could not be resolved.");
   }
 
@@ -705,12 +850,12 @@ function buildActiveStorageContext(
     driveChannelName: driveChannel.name,
     indexChannelId: indexChannel.id,
     indexChannelName: indexChannel.name,
-    folderChannelId: folderChannel.id,
-    folderChannelName: folderChannel.name,
+    folderChannelId: indexChannel.id,
+    folderChannelName: indexChannel.name,
     trashChannelId: trashChannel.id,
     trashChannelName: trashChannel.name,
-    configChannelId: configChannel.id,
-    configChannelName: configChannel.name,
+    configChannelId: indexChannel.id,
+    configChannelName: indexChannel.name,
   };
 }
 
@@ -762,6 +907,28 @@ async function writeSnapshotToChannel(
       await message.delete();
     } catch {
       // Ignore stale cleanup failures so the latest snapshot still wins.
+    }
+  }
+}
+
+async function migrateLegacyMetadataSnapshots(
+  context: ActiveStorageContext,
+  legacyChannels: Map<string, { id: string; name: string }>,
+): Promise<void> {
+  const legacyFolderChannel = legacyChannels.get(LEGACY_FOLDER_CHANNEL_NAME);
+  const legacyConfigChannel = legacyChannels.get(LEGACY_CONFIG_CHANNEL_NAME);
+
+  if (legacyFolderChannel && !(await hasCurrentFolderSnapshot(context))) {
+    const legacyFolderSnapshot = await readJsonSnapshot(legacyFolderChannel.id, [FOLDER_SNAPSHOT_FILENAME]);
+    if (legacyFolderSnapshot && isFolderSnapshot(legacyFolderSnapshot.payload)) {
+      await syncFolderSnapshot(context, legacyFolderSnapshot.payload);
+    }
+  }
+
+  if (legacyConfigChannel && !(await hasCurrentConfigSnapshot(context))) {
+    const legacyConfigSnapshot = await readJsonSnapshot(legacyConfigChannel.id, [CONFIG_SNAPSHOT_FILENAME]);
+    if (legacyConfigSnapshot && isConfigSnapshot(legacyConfigSnapshot.payload)) {
+      await syncConfigSnapshot(context, legacyConfigSnapshot.payload);
     }
   }
 }
@@ -982,8 +1149,11 @@ export async function inspectDiscasaSetup(guildId: string): Promise<DiscasaSetup
 
   await guild.channels.fetch();
   const structure = resolveDiscasaStructure(guild);
-  const configChannel = structure.channels.get("discasa-config");
-  const configMarkerPresent = configChannel ? Boolean(await readInstallMarker(configChannel.id)) : false;
+  const metadataChannel = structure.channels.get(DISCASA_CHANNELS[1]);
+  const legacyConfigChannel = structure.legacyChannels.get(LEGACY_CONFIG_CHANNEL_NAME);
+  const configMarkerPresent =
+    Boolean(metadataChannel && (await readInstallMarker(metadataChannel.id))) ||
+    Boolean(legacyConfigChannel && (await readInstallMarker(legacyConfigChannel.id)));
   const categoryPresent = Boolean(structure.category);
   const channelsPresent = structure.missingChannels.length === 0;
   const isApplied = categoryPresent && channelsPresent && configMarkerPresent;
@@ -1009,12 +1179,12 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
       driveChannelName: DISCASA_CHANNELS[0],
       indexChannelId: "mock-index",
       indexChannelName: DISCASA_CHANNELS[1],
-      folderChannelId: "mock-folder",
-      folderChannelName: DISCASA_CHANNELS[2],
+      folderChannelId: "mock-index",
+      folderChannelName: DISCASA_CHANNELS[1],
       trashChannelId: "mock-trash",
-      trashChannelName: DISCASA_CHANNELS[3],
-      configChannelId: "mock-config",
-      configChannelName: DISCASA_CHANNELS[4],
+      trashChannelName: DISCASA_CHANNELS[2],
+      configChannelId: "mock-index",
+      configChannelName: DISCASA_CHANNELS[1],
     };
   }
 
@@ -1087,6 +1257,7 @@ export async function initializeDiscasaInGuild(guildId: string, authenticatedUse
   }
 
   const context = buildActiveStorageContext(guild, { id: category.id, name: category.name }, resolvedChannels);
+  await migrateLegacyMetadataSnapshots(context, initialStructure.legacyChannels);
   await syncInstallMarker(context);
   return context;
 }
@@ -1130,7 +1301,15 @@ export async function hasCurrentIndexSnapshot(context: ActiveStorageContext): Pr
     return false;
   }
 
-  return Boolean(await readSnapshotMessage(context.indexChannelId, [INDEX_SNAPSHOT_FILENAME]));
+  try {
+    return Boolean(await readSnapshotMessage(context.indexChannelId, [INDEX_SNAPSHOT_FILENAME]));
+  } catch (error) {
+    if (error instanceof DiscordStorageUnavailableError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function hasCurrentFolderSnapshot(context: ActiveStorageContext): Promise<boolean> {
@@ -1138,7 +1317,15 @@ export async function hasCurrentFolderSnapshot(context: ActiveStorageContext): P
     return false;
   }
 
-  return Boolean(await readSnapshotMessage(context.folderChannelId, [FOLDER_SNAPSHOT_FILENAME]));
+  try {
+    return Boolean(await readSnapshotMessage(context.folderChannelId, [FOLDER_SNAPSHOT_FILENAME]));
+  } catch (error) {
+    if (error instanceof DiscordStorageUnavailableError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function hasCurrentConfigSnapshot(context: ActiveStorageContext): Promise<boolean> {
@@ -1146,7 +1333,15 @@ export async function hasCurrentConfigSnapshot(context: ActiveStorageContext): P
     return false;
   }
 
-  return Boolean(await readSnapshotMessage(context.configChannelId, [CONFIG_SNAPSHOT_FILENAME]));
+  try {
+    return Boolean(await readSnapshotMessage(context.configChannelId, [CONFIG_SNAPSHOT_FILENAME]));
+  } catch (error) {
+    if (error instanceof DiscordStorageUnavailableError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function readLatestIndexSnapshot(

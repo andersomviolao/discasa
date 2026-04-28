@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const currentFilePath = fileURLToPath(import.meta.url);
 const currentDirPath = path.dirname(currentFilePath);
-const rootEnvPath = path.resolve(currentDirPath, "../../../../.env");
+const rootEnvPath = path.resolve(currentDirPath, "../../../.env");
 
 dotenv.config({ path: rootEnvPath });
 

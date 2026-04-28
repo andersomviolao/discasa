@@ -12,7 +12,7 @@ echo ==========================================
 echo.
 echo Close the app before running this reset.
 echo.
-echo This will remove cached/generated items from the project folder:
+echo This will remove generated development items from the project folder:
 echo - node_modules
 echo - package-lock.json
 echo - apps\desktop\node_modules
@@ -20,14 +20,20 @@ echo - apps\desktop\dist
 echo - apps\desktop\src-tauri\target
 echo - apps\server\dist
 echo - apps\server\node_modules
-echo - apps\server\.discasa-data
 echo - target
 echo.
-echo This will also remove the local UI storage used by the app:
-echo - %%APPDATA%%\%APP_ID%
-echo - %%LOCALAPPDATA%%\%APP_ID%
-echo - %%APPDATA%%\%APP_NAME%
-echo - %%LOCALAPPDATA%%\%APP_NAME%
+echo This will also remove Discasa local app data:
+echo - %%APPDATA%%\%APP_NAME%                 ^(auth, local metadata, saved runtime state^)
+echo - %%LOCALAPPDATA%%\%APP_NAME%\Cache      ^(temporary cache, thumbnails, default local mirror^)
+echo - %%APPDATA%%\%APP_ID%                   ^(legacy Tauri app data^)
+echo - %%LOCALAPPDATA%%\%APP_ID%              ^(legacy Tauri cache^)
+echo - apps\server\.discasa-data              ^(legacy prototype storage^)
+echo.
+echo This does not delete Discord server channels.
+echo On the next setup, Discasa uses 3 Discord channels:
+echo - discasa-drive
+echo - discasa-index
+echo - discasa-trash
 echo.
 choice /C YN /M "Continue"
 if errorlevel 2 (
@@ -42,13 +48,13 @@ call :remove_dir "apps\desktop\dist"
 call :remove_dir "apps\desktop\src-tauri\target"
 call :remove_dir "apps\server\dist"
 call :remove_dir "apps\server\node_modules"
-call :remove_dir "apps\server\.discasa-data"
 call :remove_dir "target"
 
-call :remove_dir "%APPDATA%\%APP_ID%"
-call :remove_dir "%LOCALAPPDATA%\%APP_ID%"
 call :remove_dir "%APPDATA%\%APP_NAME%"
 call :remove_dir "%LOCALAPPDATA%\%APP_NAME%"
+call :remove_dir "%APPDATA%\%APP_ID%"
+call :remove_dir "%LOCALAPPDATA%\%APP_ID%"
+call :remove_dir "apps\server\.discasa-data"
 
 echo.
 echo Hard reset complete.

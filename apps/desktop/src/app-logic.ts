@@ -7,12 +7,15 @@ import type {
   DiscasaInitializationResponse,
   GuildSummary,
   LibraryItem,
-  LibraryItemSavedMediaEdit,
+  LocalStorageStatus,
   RenameAlbumInput,
   SaveLibraryItemMediaEditInput,
   UploadResponse,
 } from "@discasa/shared";
 const API_BASE = "http://localhost:3001";
+const REMOTE_CONFIG_SAVE_DEBOUNCE_MS = 700;
+let pendingViewerMouseWheelBehavior: MouseWheelBehavior | null = null;
+let viewerMouseWheelBehaviorSaveTimer: number | null = null;
 
 export type DiscasaSetupStatus = {
   botPresent: boolean;
@@ -29,7 +32,7 @@ export type HsvColor = {
   value: number;
 };
 
-export type SettingsSection = "discord" | "appearance" | "window";
+export type SettingsSection = "discord" | "appearance" | "storage" | "window";
 export type WindowState = "default" | "maximized";
 
 export type FixedLibraryViewId = "all-files" | "favorites" | "trash";
@@ -281,6 +284,14 @@ export function isOther(item: LibraryItem): boolean {
   return !isImage(item) && !isVideo(item);
 }
 
+export function getLibraryItemContentUrl(item: LibraryItem): string {
+  return item.contentUrl ?? item.attachmentUrl;
+}
+
+export function getLibraryItemThumbnailUrl(item: LibraryItem): string {
+  return item.thumbnailUrl ?? getLibraryItemContentUrl(item);
+}
+
 export function getVisibleItems(items: LibraryItem[], selectedView: SidebarView): LibraryItem[] {
   switch (selectedView.kind) {
     case "library":
@@ -344,13 +355,6 @@ export function getCurrentDescription(selectedView: SidebarView): string {
   }
 }
 
-export function getFileTypeLabel(item: LibraryItem): string {
-  if (item.isTrashed) return "TRASH";
-  if (isImage(item)) return "IMG";
-  if (isVideo(item)) return "VID";
-  return "FILE";
-}
-
 export function normalizeSavedMediaEditInput(input: SaveLibraryItemMediaEditInput): SaveLibraryItemMediaEditInput {
   return {
     rotationDegrees: normalizeRotationDegrees(input.rotationDegrees),
@@ -378,27 +382,6 @@ export function createViewerDraftStateFromItem(item: LibraryItem | null): Viewer
     hasCrop: savedEdit.hasCrop,
     canUndo: savedEdit.rotationDegrees !== 0 || savedEdit.hasCrop,
   };
-}
-
-export function createViewerDraftStateFromSavedEdit(savedEdit: LibraryItemSavedMediaEdit | null | undefined): ViewerDraftState {
-  return createViewerDraftStateFromItem(
-    savedEdit
-      ? ({
-          id: "",
-          name: "",
-          size: 0,
-          mimeType: "image/mock",
-          status: "",
-          guildId: "",
-          albumIds: [],
-          uploadedAt: "",
-          attachmentUrl: "",
-          isFavorite: false,
-          isTrashed: false,
-          savedMediaEdit: savedEdit,
-        } as LibraryItem)
-      : null,
-  );
 }
 
 export function toMediaEditSaveInput(draftState: ViewerDraftState): SaveLibraryItemMediaEditInput {
@@ -493,14 +476,30 @@ export function commitMouseWheelBehavior(
     return;
   }
 
-  void requestJson<DiscasaConfig>("/api/config", {
-    method: "PATCH",
-    body: JSON.stringify({
-      viewerMouseWheelBehavior: normalized,
-    }),
-  }).catch(() => {
-    // Keep the UI responsive even if the remote config save fails.
-  });
+  pendingViewerMouseWheelBehavior = normalized;
+
+  if (viewerMouseWheelBehaviorSaveTimer !== null) {
+    window.clearTimeout(viewerMouseWheelBehaviorSaveTimer);
+  }
+
+  viewerMouseWheelBehaviorSaveTimer = window.setTimeout(() => {
+    const valueToPersist = pendingViewerMouseWheelBehavior;
+    pendingViewerMouseWheelBehavior = null;
+    viewerMouseWheelBehaviorSaveTimer = null;
+
+    if (!valueToPersist) {
+      return;
+    }
+
+    void requestJson<DiscasaConfig>("/api/config", {
+      method: "PATCH",
+      body: JSON.stringify({
+        viewerMouseWheelBehavior: valueToPersist,
+      }),
+    }).catch(() => {
+      // Keep the UI responsive even if the remote config save fails.
+    });
+  }, REMOTE_CONFIG_SAVE_DEBOUNCE_MS);
 }
 
 export async function getSession(): Promise<AppSession> {
@@ -530,13 +529,30 @@ export async function getAppConfig(): Promise<DiscasaConfig> {
 }
 
 export async function updateAppConfig(input: Partial<DiscasaConfig>): Promise<DiscasaConfig> {
-  const config = await requestJson<DiscasaConfig>("/api/config", {
+  return requestJson<DiscasaConfig>("/api/config", {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+}
 
-  commitMouseWheelBehavior(config.viewerMouseWheelBehavior, { persistRemote: false });
-  return config;
+export async function getLocalStorageStatus(): Promise<LocalStorageStatus> {
+  return requestJson<LocalStorageStatus>("/api/local-storage");
+}
+
+export async function chooseLocalMirrorFolder(): Promise<string | null> {
+  if (isTauriRuntime()) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose local mirror folder",
+    });
+
+    return typeof selectedPath === "string" ? selectedPath : null;
+  }
+
+  const fallbackPath = window.prompt("Folder path for local mirrored files");
+  return fallbackPath && fallbackPath.trim().length > 0 ? fallbackPath.trim() : null;
 }
 
 export async function getAlbums(): Promise<AlbumRecord[]> {
@@ -568,6 +584,19 @@ export async function deleteAlbum(albumId: string): Promise<{ deleted: true }> {
   return requestJson<{ deleted: true }>(`/api/albums/${encodeURIComponent(albumId)}`, {
     method: "DELETE",
   });
+}
+
+export async function addLibraryItemsToAlbum(
+  albumId: string,
+  itemIds: string[],
+): Promise<{ items: LibraryItem[]; albums: AlbumRecord[] }> {
+  return requestJson<{ items: LibraryItem[]; albums: AlbumRecord[] }>(
+    `/api/albums/${encodeURIComponent(albumId)}/items`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ itemIds }),
+    },
+  );
 }
 
 export async function getLibraryItems(): Promise<LibraryItem[]> {

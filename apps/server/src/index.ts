@@ -1,10 +1,9 @@
 import cors from "cors";
 import express from "express";
 import session from "express-session";
-import { hydrateSessionFromPersistedAuth } from "./lib/auth-store";
-import { apiRouter } from "./routes/api";
-import { authRouter } from "./routes/auth";
-import { env } from "./lib/env";
+import { env } from "./config";
+import { hydrateSessionFromPersistedAuth } from "./persistence";
+import { apiRouter, authRouter } from "./routes";
 
 declare module "express-session" {
   interface SessionData {

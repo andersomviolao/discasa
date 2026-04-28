@@ -1,5 +1,5 @@
 export const DISCASA_CATEGORY_NAME = "Discasa";
-export const DISCASA_CHANNELS = ["discasa-drive", "discasa-index", "discasa-folder", "discasa-trash", "discasa-config"] as const;
+export const DISCASA_CHANNELS = ["discasa-drive", "discasa-index", "discasa-trash"] as const;
 
 export type GuildSummary = {
   id: string;
@@ -88,9 +88,12 @@ export type LibraryItem = {
   storageMessageId?: string;
   originalSource?: LibraryItemOriginalSource | null;
   savedMediaEdit?: LibraryItemSavedMediaEdit | null;
+  contentUrl?: string;
+  thumbnailUrl?: string;
+  localMirrorAvailable?: boolean;
 };
 
-export type LibraryItemIndex = Omit<LibraryItem, "albumIds">;
+export type LibraryItemIndex = Omit<LibraryItem, "albumIds" | "contentUrl" | "thumbnailUrl" | "localMirrorAvailable">;
 
 export type FolderNode = {
   id: string;
@@ -113,8 +116,11 @@ export type DiscasaConfig = {
   minimizeToTray: boolean;
   closeToTray: boolean;
   thumbnailZoomPercent: number;
+  galleryDisplayMode: "free" | "square";
   viewerMouseWheelBehavior: "zoom" | "navigate";
   sidebarCollapsed: boolean;
+  localMirrorEnabled: boolean;
+  localMirrorPath: string | null;
 };
 
 export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
@@ -122,8 +128,24 @@ export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
   minimizeToTray: false,
   closeToTray: false,
   thumbnailZoomPercent: 35,
+  galleryDisplayMode: "free",
   viewerMouseWheelBehavior: "zoom",
   sidebarCollapsed: false,
+  localMirrorEnabled: false,
+  localMirrorPath: null,
+};
+
+export type LocalStorageStatus = {
+  localMirrorEnabled: boolean;
+  configuredMirrorPath: string | null;
+  resolvedMirrorPath: string;
+  localMirrorPathExists: boolean;
+  localMirrorSetupRequired: boolean;
+  defaultMirrorPath: string;
+  mirroredFileCount: number;
+  thumbnailCachePath: string;
+  thumbnailCacheFileCount: number;
+  thumbnailCacheBytes: number;
 };
 
 export type PersistedIndexSnapshot = {

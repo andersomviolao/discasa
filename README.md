@@ -14,6 +14,7 @@ Discasa currently includes:
 - mock mode support for UI and flow development
 - Discord-backed persistence for files, folders, trash, and app configuration
 - local cache and optional local file mirroring
+- startup library metadata cache for faster first paint
 
 ## Architecture
 
@@ -53,6 +54,8 @@ On Windows, runtime data is stored outside the project folder so the app can wor
 
 `%APPDATA%\Discasa` is used for local auth/session state and runtime metadata. `%LOCALAPPDATA%\Discasa\Cache` is used for temporary files, thumbnails, and the default local mirror folder.
 
+The desktop app also keeps a per-server library metadata cache in local app storage. On startup, Discasa can render the last known albums and files immediately, then reconcile with the backend once the current Discord-backed state is available.
+
 If a user chooses a custom local mirror folder, Discasa stores that chosen path in the Discord-backed app config. On a new PC, if local mirroring is enabled and the saved folder does not exist, the setup flow asks the user to choose a new folder or use the default Discasa cache folder. If local mirroring is disabled, that setup step is skipped.
 
 The server still recognizes the old prototype folder at `apps\server\.discasa-data` and copies compatible data into the new AppData locations on startup when the new files do not exist.
@@ -76,6 +79,8 @@ The server still recognizes the old prototype folder at `apps\server\.discasa-da
 - file upload through the local backend
 - album creation, rename, reorder, and deletion
 - multi-select and drag-to-folder interactions
+- move selected files into an existing folder through the bulk action modal
+- remove selected files from the current folder without deleting them from the library
 - favorites support
 - trash, restore, and permanent delete flows
 - saved image edit metadata support, including crop mode and rotation state
@@ -98,11 +103,13 @@ The server still recognizes the old prototype folder at `apps\server\.discasa-da
 - persisted local runtime data
 - migration path for legacy metadata and storage layouts
 - Windows batch launcher for the development workflow
+- Windows batch helper for stopping local Discasa dev servers
 - hard reset script for clearing generated artifacts and local Discasa app data
 
 ## Development Scripts
 
 - `start-discasa.bat` starts the backend and Tauri desktop app for local development.
+- `stop-discasa-servers.bat` stops local processes listening on Discasa development ports.
 - `start-discasa-hard-reset.bat` removes generated development artifacts, current AppData runtime folders, legacy Tauri folders, and legacy prototype storage.
 
 The hard reset script does not delete Discord server channels or cloud snapshots.

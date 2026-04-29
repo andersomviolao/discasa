@@ -1526,6 +1526,72 @@ export function addLibraryItemsToAlbum(albumId: string, itemIds: string[]): Libr
   return getHydratedLibraryItems().filter((item) => updatedItemIds.has(item.id));
 }
 
+export function moveLibraryItemsToAlbum(albumId: string, itemIds: string[]): LibraryItem[] | null {
+  if (!hasFolder(albumId)) {
+    return null;
+  }
+
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  const itemIdSet = new Set(database.items.map((item) => item.id));
+  const nextItemIds = uniqueItemIds.filter((itemId) => itemIdSet.has(itemId));
+
+  if (!nextItemIds.length) {
+    return [];
+  }
+
+  const nextItemIdSet = new Set(nextItemIds);
+  const movedAt = new Date().toISOString();
+
+  database.memberships = database.memberships.filter((membership) => !nextItemIdSet.has(membership.itemId));
+
+  for (const itemId of nextItemIds) {
+    database.memberships.push(createAlbumMembership(albumId, itemId, movedAt));
+  }
+
+  const folder = database.folders.find((entry) => entry.id === albumId);
+  if (folder) {
+    folder.updatedAt = movedAt;
+  }
+
+  saveDatabase();
+
+  const updatedItemIds = new Set(nextItemIds);
+  return getHydratedLibraryItems().filter((item) => updatedItemIds.has(item.id));
+}
+
+export function removeLibraryItemsFromAlbum(albumId: string, itemIds: string[]): LibraryItem[] | null {
+  if (!hasFolder(albumId)) {
+    return null;
+  }
+
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  const itemIdSet = new Set(database.items.map((item) => item.id));
+  const nextItemIds = uniqueItemIds.filter((itemId) => itemIdSet.has(itemId));
+
+  if (!nextItemIds.length) {
+    return [];
+  }
+
+  const nextItemIdSet = new Set(nextItemIds);
+  const beforeCount = database.memberships.length;
+  database.memberships = database.memberships.filter(
+    (membership) => membership.folderId !== albumId || !nextItemIdSet.has(membership.itemId),
+  );
+
+  if (database.memberships.length !== beforeCount) {
+    const removedAt = new Date().toISOString();
+    const folder = database.folders.find((entry) => entry.id === albumId);
+    if (folder) {
+      folder.updatedAt = removedAt;
+    }
+
+    saveDatabase();
+  }
+
+  const updatedItemIds = new Set(nextItemIds);
+  return getHydratedLibraryItems().filter((item) => updatedItemIds.has(item.id));
+}
+
 export function updateLibraryItemStorage(
   itemId: string,
   nextStorage: Pick<UploadedFileRecord, "attachmentUrl" | "storageChannelId" | "storageMessageId" | "guildId">,

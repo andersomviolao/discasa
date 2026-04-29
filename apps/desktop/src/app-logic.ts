@@ -599,6 +599,32 @@ export async function addLibraryItemsToAlbum(
   );
 }
 
+export async function moveLibraryItemsToAlbum(
+  albumId: string,
+  itemIds: string[],
+): Promise<{ items: LibraryItem[]; albums: AlbumRecord[] }> {
+  return requestJson<{ items: LibraryItem[]; albums: AlbumRecord[] }>(
+    `/api/albums/${encodeURIComponent(albumId)}/items/move`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ itemIds }),
+    },
+  );
+}
+
+export async function removeLibraryItemsFromAlbum(
+  albumId: string,
+  itemIds: string[],
+): Promise<{ items: LibraryItem[]; albums: AlbumRecord[] }> {
+  return requestJson<{ items: LibraryItem[]; albums: AlbumRecord[] }>(
+    `/api/albums/${encodeURIComponent(albumId)}/items/remove`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ itemIds }),
+    },
+  );
+}
+
 export async function getLibraryItems(): Promise<LibraryItem[]> {
   return requestJson<LibraryItem[]>("/api/library");
 }

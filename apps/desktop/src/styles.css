@@ -997,6 +997,7 @@ img {
   z-index: var(--z-modal);
   display: grid;
   place-items: center;
+  animation: modal-root-fade 160ms ease-out both;
 }
 
 .album-modal-root {
@@ -1010,6 +1011,7 @@ img {
   background: var(--surface-backdrop);
   backdrop-filter: blur(var(--blur-3));
   cursor: default;
+  animation: modal-backdrop-fade 180ms ease-out both;
 }
 
 .album-modal-backdrop {
@@ -1029,6 +1031,7 @@ img {
   border: var(--size-1) solid var(--border-soft);
   background: var(--surface-modal);
   box-shadow: var(--shadow-modal);
+  animation: modal-panel-enter 180ms ease-out both;
 }
 
 .settings-modal-sidebar {
@@ -1437,6 +1440,7 @@ img {
   border: var(--size-1) solid var(--border-soft);
   background: var(--gradient-album-modal);
   box-shadow: var(--shadow-album-modal);
+  animation: modal-panel-enter 180ms ease-out both;
 }
 
 .album-modal-content {
@@ -1528,6 +1532,140 @@ img {
   min-width: var(--size-96);
   min-height: var(--size-44);
   padding-inline: var(--size-18);
+}
+
+.move-items-modal {
+  width: min(var(--size-520), calc(100vw - var(--size-40)));
+}
+
+.move-items-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-14);
+  padding: var(--space-6) var(--space-7) var(--space-5);
+}
+
+.move-items-summary {
+  display: inline-flex;
+  align-self: flex-start;
+  min-height: var(--size-28);
+  align-items: center;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  border: var(--size-1) solid var(--border-soft);
+  background: var(--white-alpha-04);
+  color: var(--text-muted);
+}
+
+.move-items-folder-list {
+  max-height: min(var(--size-280), 42vh);
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-8);
+  padding-right: var(--size-2);
+}
+
+.move-items-folder {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--size-52);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: var(--size-1) solid var(--border-soft);
+  background: var(--white-alpha-035);
+  cursor: pointer;
+  transition:
+    border-color var(--transition-state),
+    background var(--transition-state),
+    box-shadow var(--transition-state),
+    opacity var(--transition-state);
+}
+
+.move-items-folder:hover {
+  border-color: var(--white-alpha-14);
+  background: var(--white-alpha-06);
+}
+
+.move-items-folder.selected {
+  border-color: var(--accent-alpha-74);
+  background: var(--accent-alpha-14);
+  box-shadow: inset 0 0 0 var(--size-1) var(--accent-alpha-16);
+}
+
+.move-items-folder input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.move-items-folder-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-32);
+  height: var(--size-32);
+  border-radius: var(--radius-pill);
+  background: var(--accent-alpha-16);
+  color: var(--accent-color);
+}
+
+.move-items-folder-icon svg {
+  width: var(--size-16);
+  height: var(--size-16);
+}
+
+.move-items-folder-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4);
+}
+
+.move-items-folder-name {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move-items-folder-copy small {
+  color: var(--text-muted);
+  font-size: var(--font-size-body);
+}
+
+@keyframes modal-root-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-backdrop-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--size-8)) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .thumbnail-zoom-control {
@@ -2062,6 +2200,24 @@ img {
   flex-direction: column;
   gap: var(--size-8);
   cursor: default;
+  opacity: 1;
+  transform: translateY(0);
+  filter: none;
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    filter 180ms ease;
+}
+
+.file-tile.dragging {
+  opacity: 0.36;
+  transform: scale(0.985);
+  filter: saturate(0.75);
+}
+
+.file-tile.dragging .file-preview {
+  border-color: var(--accent-alpha-74);
+  box-shadow: 0 0 0 var(--size-1) var(--accent-alpha-20);
 }
 
 .file-card {
@@ -2167,7 +2323,11 @@ img {
   width: var(--size-84);
   height: var(--size-84);
   pointer-events: none;
-  animation: drag-stack-pop 160ms ease-out both;
+  opacity: 0.96;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  animation: drag-stack-pop 180ms ease-out both;
 }
 
 .drag-stack-preview-tile {
@@ -2221,13 +2381,13 @@ img {
 
 @keyframes drag-stack-pop {
   from {
-    opacity: 0.82;
-    transform: scale(0.88);
+    opacity: 0;
+    transform: translateY(var(--size-6)) scale(0.88);
   }
 
   to {
-    opacity: 1;
-    transform: scale(1);
+    opacity: 0.96;
+    transform: translateY(0) scale(1);
   }
 }
 

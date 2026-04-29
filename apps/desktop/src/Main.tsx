@@ -47,10 +47,12 @@ import {
   getLibraryItems,
   getSession,
   initializeDiscasa,
+  moveLibraryItemsToAlbum,
   moveToTrash,
   openDiscordBotInstall,
   openDiscordLogin,
   renameAlbum,
+  removeLibraryItemsFromAlbum,
   reorderAlbums,
   restoreFromTrash,
   restoreLibraryItemOriginal as restoreLibraryItemOriginalRequest,
@@ -103,6 +105,8 @@ const ACCENT_COLOR_KEY = "discasa.ui.accentColor";
 const SELECTED_GUILD_KEY = "discasa.discord.selectedGuildId";
 const ACTIVE_GUILD_ID_KEY = "discasa.discord.activeGuildId";
 const ACTIVE_GUILD_NAME_KEY = "discasa.discord.activeGuildName";
+const LIBRARY_CACHE_KEY_PREFIX = "discasa.library.cache";
+const LIBRARY_CACHE_VERSION = 1;
 const THUMBNAIL_ZOOM_KEY = "discasa.library.thumbnailZoomPercent";
 const DEFAULT_ACCENT_HEX = DISCASA_DEFAULT_CONFIG.accentColor;
 const THUMBNAIL_BASE_SIZE = 400;
@@ -113,8 +117,102 @@ const CONFIG_SAVE_DEBOUNCE_MS = 700;
 const DISCASA_LIBRARY_ITEM_DRAG_MIME = "application/x-discasa-library-items";
 const DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX = "discasa-library-items:";
 
+type CachedLibraryState = {
+  version: typeof LIBRARY_CACHE_VERSION;
+  guildId: string;
+  guildName: string | null;
+  sessionName: string | null;
+  sessionAvatarUrl: string | null;
+  albums: AlbumRecord[];
+  items: LibraryItem[];
+  savedAt: string;
+};
+
 function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+function getLibraryCacheKey(guildId: string): string {
+  return `${LIBRARY_CACHE_KEY_PREFIX}.${guildId}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isCachedAlbumRecord(value: unknown): value is AlbumRecord {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.itemCount === "number"
+  );
+}
+
+function isCachedLibraryItem(value: unknown): value is LibraryItem {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.size === "number" &&
+    typeof value.mimeType === "string" &&
+    Array.isArray(value.albumIds)
+  );
+}
+
+function readCachedLibraryState(guildId: string): CachedLibraryState | null {
+  if (!guildId || typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getLibraryCacheKey(guildId));
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      !isRecord(parsed) ||
+      parsed.version !== LIBRARY_CACHE_VERSION ||
+      parsed.guildId !== guildId ||
+      !Array.isArray(parsed.albums) ||
+      !Array.isArray(parsed.items)
+    ) {
+      return null;
+    }
+
+    return {
+      version: LIBRARY_CACHE_VERSION,
+      guildId,
+      guildName: typeof parsed.guildName === "string" ? parsed.guildName : null,
+      sessionName: typeof parsed.sessionName === "string" ? parsed.sessionName : null,
+      sessionAvatarUrl: typeof parsed.sessionAvatarUrl === "string" ? parsed.sessionAvatarUrl : null,
+      albums: parsed.albums.filter(isCachedAlbumRecord),
+      items: parsed.items.filter(isCachedLibraryItem),
+      savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedLibraryState(input: Omit<CachedLibraryState, "version" | "savedAt">): void {
+  if (!input.guildId || typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const nextCache: CachedLibraryState = {
+      ...input,
+      version: LIBRARY_CACHE_VERSION,
+      savedAt: new Date().toISOString(),
+    };
+
+    window.localStorage.setItem(getLibraryCacheKey(input.guildId), JSON.stringify(nextCache));
+  } catch {
+    // Local cache is opportunistic; the server remains the source of truth.
+  }
 }
 
 function hasDataTransferType(dataTransfer: DataTransfer, type: string): boolean {
@@ -209,6 +307,8 @@ function requiresLocalMirrorSetup(status: LocalStorageStatus | null): boolean {
 }
 
 export function App() {
+  const initialActiveGuildId = readStoredString(ACTIVE_GUILD_ID_KEY, "");
+  const initialCachedLibrary = readCachedLibraryState(initialActiveGuildId);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateAlbumOpen, setIsCreateAlbumOpen] = useState(false);
   const [newAlbumName, setNewAlbumName] = useState("");
@@ -219,14 +319,14 @@ export function App() {
   const [isRenamingAlbum, setIsRenamingAlbum] = useState(false);
   const [renameAlbumError, setRenameAlbumError] = useState("");
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("discord");
-  const [sessionName, setSessionName] = useState<string | null>(null);
-  const [sessionAvatarUrl, setSessionAvatarUrl] = useState<string | null>(null);
+  const [sessionName, setSessionName] = useState<string | null>(initialCachedLibrary?.sessionName ?? null);
+  const [sessionAvatarUrl, setSessionAvatarUrl] = useState<string | null>(initialCachedLibrary?.sessionAvatarUrl ?? null);
   const [guilds, setGuilds] = useState<GuildSummary[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState<string>(() => readStoredString(SELECTED_GUILD_KEY, ""));
-  const [activeGuildId, setActiveGuildId] = useState<string>(() => readStoredString(ACTIVE_GUILD_ID_KEY, ""));
+  const [activeGuildId, setActiveGuildId] = useState<string>(initialActiveGuildId);
   const [activeGuildName, setActiveGuildName] = useState<string | null>(() => {
     const value = readStoredString(ACTIVE_GUILD_NAME_KEY, "");
-    return value || null;
+    return value || initialCachedLibrary?.guildName || null;
   });
   const [isLoadingGuilds, setIsLoadingGuilds] = useState(false);
   const [isApplyingGuild, setIsApplyingGuild] = useState(false);
@@ -234,8 +334,8 @@ export function App() {
   const [authSetupError, setAuthSetupError] = useState("");
   const [isCheckingSetup, setIsCheckingSetup] = useState(false);
   const [hasOpenedBotInvite, setHasOpenedBotInvite] = useState(false);
-  const [albums, setAlbums] = useState<AlbumRecord[]>([]);
-  const [items, setItems] = useState<LibraryItem[]>([]);
+  const [albums, setAlbums] = useState<AlbumRecord[]>(initialCachedLibrary?.albums ?? []);
+  const [items, setItems] = useState<LibraryItem[]>(initialCachedLibrary?.items ?? []);
   const [selectedView, setSelectedView] = useState<SidebarView>({ kind: "library", id: "all-files" });
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [isBusy, setIsBusy] = useState(true);
@@ -257,6 +357,10 @@ export function App() {
   const [deleteFileTarget, setDeleteFileTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteFileError, setDeleteFileError] = useState("");
+  const [isMoveItemsOpen, setIsMoveItemsOpen] = useState(false);
+  const [moveItemsTargetAlbumId, setMoveItemsTargetAlbumId] = useState("");
+  const [isMovingItems, setIsMovingItems] = useState(false);
+  const [moveItemsError, setMoveItemsError] = useState("");
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [draggingLibraryItemIds, setDraggingLibraryItemIds] = useState<string[]>([]);
   const [sidebarDropAlbumId, setSidebarDropAlbumId] = useState<string | null>(null);
@@ -278,6 +382,8 @@ export function App() {
   const draggingLibraryItemIdsRef = useRef<string[]>([]);
   const nativeDropAlbumIdRef = useRef<string | null>(null);
   const activeGuildIdRef = useRef(activeGuildId);
+  const libraryCacheGuildIdRef = useRef(initialCachedLibrary ? initialActiveGuildId : "");
+  const hasHydratedLibraryCacheRef = useRef(Boolean(initialCachedLibrary));
   const pendingConfigPatchRef = useRef<Partial<DiscasaConfig> | null>(null);
   const configSaveTimerRef = useRef<number | null>(null);
   const isConfigSaveInFlightRef = useRef(false);
@@ -285,6 +391,29 @@ export function App() {
 
   const thumbnailZoomPercent = THUMBNAIL_ZOOM_LEVELS[thumbnailZoomIndex] ?? DEFAULT_THUMBNAIL_ZOOM_PERCENT;
   const thumbnailSize = getThumbnailSizeFromZoomPercent(thumbnailZoomPercent);
+
+  function cacheLibraryState(next: {
+    guildId?: string | null;
+    guildName?: string | null;
+    sessionName?: string | null;
+    sessionAvatarUrl?: string | null;
+    albums: AlbumRecord[];
+    items: LibraryItem[];
+  }): void {
+    const guildId = next.guildId ?? activeGuildIdRef.current;
+    if (!guildId) {
+      return;
+    }
+
+    writeCachedLibraryState({
+      guildId,
+      guildName: next.guildName ?? activeGuildName,
+      sessionName: next.sessionName ?? sessionName,
+      sessionAvatarUrl: next.sessionAvatarUrl ?? sessionAvatarUrl,
+      albums: next.albums,
+      items: next.items,
+    });
+  }
 
   useEffect(() => {
     if (hasBootstrappedRef.current) {
@@ -306,6 +435,21 @@ export function App() {
   useEffect(() => {
     activeGuildIdRef.current = activeGuildId;
   }, [activeGuildId]);
+
+  useEffect(() => {
+    if (!activeGuildId || !hasHydratedLibraryCacheRef.current || libraryCacheGuildIdRef.current !== activeGuildId) {
+      return;
+    }
+
+    writeCachedLibraryState({
+      guildId: activeGuildId,
+      guildName: activeGuildName,
+      sessionName,
+      sessionAvatarUrl,
+      albums,
+      items,
+    });
+  }, [activeGuildId, activeGuildName, sessionAvatarUrl, sessionName, albums, items]);
 
   useEffect(() => {
     return () => {
@@ -430,10 +574,15 @@ export function App() {
   }, [renameAlbumTarget]);
 
   useEffect(() => {
-    if (!isSettingsOpen && !isCreateAlbumOpen && !renameAlbumTarget && !deleteAlbumTarget && !deleteFileTarget) return;
+    if (!isSettingsOpen && !isCreateAlbumOpen && !renameAlbumTarget && !deleteAlbumTarget && !deleteFileTarget && !isMoveItemsOpen) return;
 
     const handleEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape") return;
+
+      if (isMoveItemsOpen) {
+        closeMoveItemsModal();
+        return;
+      }
 
       if (deleteFileTarget) {
         if (!isDeletingFile) {
@@ -480,6 +629,8 @@ export function App() {
     isDeletingAlbum,
     deleteFileTarget,
     isDeletingFile,
+    isMoveItemsOpen,
+    isMovingItems,
   ]);
 
   useEffect(() => {
@@ -740,6 +891,22 @@ export function App() {
       setActiveGuildName(session.activeGuild?.name ?? null);
       setAlbums(nextAlbums);
       setItems(nextItems);
+
+      if (session.activeGuild) {
+        libraryCacheGuildIdRef.current = session.activeGuild.id;
+        hasHydratedLibraryCacheRef.current = true;
+        cacheLibraryState({
+          guildId: session.activeGuild.id,
+          guildName: session.activeGuild.name,
+          sessionName: session.user?.username ?? null,
+          sessionAvatarUrl: session.user?.avatarUrl ?? null,
+          albums: nextAlbums,
+          items: nextItems,
+        });
+      } else {
+        libraryCacheGuildIdRef.current = "";
+        hasHydratedLibraryCacheRef.current = false;
+      }
 
       if (!session.authenticated || !session.activeGuild) {
         setAttachmentWarnings([]);
@@ -1067,6 +1234,23 @@ export function App() {
     setDeleteFileError("");
   }
 
+  function openMoveItemsModal(): void {
+    if (isBusy || selectedItemIds.length === 0 || albums.length === 0) {
+      return;
+    }
+
+    setAlbumContextMenu(null);
+    setMoveItemsError("");
+    setMoveItemsTargetAlbumId((current) => (current && albums.some((album) => album.id === current) ? current : albums[0]?.id ?? ""));
+    setIsMoveItemsOpen(true);
+  }
+
+  function closeMoveItemsModal(): void {
+    if (isMovingItems) return;
+    setIsMoveItemsOpen(false);
+    setMoveItemsError("");
+  }
+
   async function handleCreateAlbumSubmit(event?: FormEvent<HTMLFormElement>): Promise<void> {
     event?.preventDefault();
 
@@ -1132,6 +1316,77 @@ export function App() {
       setRenameAlbumError(caughtError instanceof Error ? caughtError.message : "Could not rename the album.");
     } finally {
       setIsRenamingAlbum(false);
+    }
+  }
+
+  async function handleMoveItemsSubmit(event?: FormEvent<HTMLFormElement>): Promise<void> {
+    event?.preventDefault();
+
+    if (!moveItemsTargetAlbumId) {
+      setMoveItemsError("Choose a folder.");
+      return;
+    }
+
+    const selectedItemIdSet = new Set(selectedItemIds);
+    const targets = items.filter((item) => selectedItemIdSet.has(item.id) && !item.isTrashed);
+
+    if (!targets.length) {
+      setMoveItemsError("Select at least one active file.");
+      return;
+    }
+
+    setIsMovingItems(true);
+    setIsBusy(true);
+    setMoveItemsError("");
+    setError("");
+
+    try {
+      const result = await moveLibraryItemsToAlbum(moveItemsTargetAlbumId, targets.map((item) => item.id));
+      const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
+      const targetAlbumName = result.albums.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? "the selected folder";
+
+      albumsRef.current = result.albums;
+      setAlbums(result.albums);
+      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      setSelectedView({ kind: "album", id: moveItemsTargetAlbumId });
+      setMessage(`${targets.length} file(s) moved to ${targetAlbumName}.`);
+      setSelectedItemIds([]);
+      selectionAnchorRef.current = null;
+      setIsMoveItemsOpen(false);
+    } catch (caughtError) {
+      const nextError = caughtError instanceof Error ? caughtError.message : "Could not move the selected files.";
+      setMoveItemsError(nextError);
+      setError(nextError);
+    } finally {
+      setIsMovingItems(false);
+      setIsBusy(false);
+    }
+  }
+
+  async function handleRemoveItemsFromAlbum(albumId: string, itemIds: string[]): Promise<void> {
+    const uniqueItemIds = Array.from(new Set(itemIds));
+    if (!albumId || !uniqueItemIds.length || isBusy) {
+      return;
+    }
+
+    setIsBusy(true);
+    setError("");
+
+    try {
+      const result = await removeLibraryItemsFromAlbum(albumId, uniqueItemIds);
+      const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
+      const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the folder";
+
+      albumsRef.current = result.albums;
+      setAlbums(result.albums);
+      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      setSelectedItemIds([]);
+      selectionAnchorRef.current = null;
+      setMessage(`${uniqueItemIds.length} file(s) removed from ${targetAlbumName}.`);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Could not remove the selected files from the folder.");
+    } finally {
+      setIsBusy(false);
     }
   }
 
@@ -1805,6 +2060,9 @@ export function App() {
             items={visibleItems}
             attachmentWarnings={attachmentWarnings}
             selectedItemIds={selectedItemIds}
+            draggingItemIds={draggingLibraryItemIds}
+            currentAlbumId={selectedView.kind === "album" ? selectedView.id : null}
+            canMoveSelectedItems={albums.length > 0}
             isBusy={isBusy}
             isDraggingFiles={isDraggingFiles}
             galleryDisplayMode={galleryDisplayMode}
@@ -1824,7 +2082,27 @@ export function App() {
             onDrop={handleFileDrop}
             onStartItemDrag={handleLibraryItemDragStart}
             onEndItemDrag={handleLibraryItemDragEnd}
+            onBeginInternalItemDrag={(itemIds) => {
+              draggingLibraryItemIdsRef.current = itemIds;
+              setDraggingLibraryItemIds(itemIds);
+              setIsDraggingFiles(false);
+            }}
+            onMoveInternalItemDrag={(albumId) => {
+              nativeDropAlbumIdRef.current = albumId;
+              setSidebarDropAlbumId(albumId);
+            }}
+            onCompleteInternalItemDrag={(albumId, itemIds) => {
+              if (!albumId) {
+                handleLibraryItemDragEnd();
+                return;
+              }
+
+              void handleAddLibraryItemsToAlbum(albumId, itemIds);
+            }}
+            onCancelInternalItemDrag={handleLibraryItemDragEnd}
             onToggleFavorite={handleToggleFavorite}
+            onOpenMoveItemsModal={openMoveItemsModal}
+            onRemoveItemsFromAlbum={handleRemoveItemsFromAlbum}
             onMoveToTrash={handleMoveToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
             onSaveMediaEdit={handleSaveMediaEdit}
@@ -1942,6 +2220,24 @@ export function App() {
           error={deleteFileError}
           onClose={closeDeleteFileModal}
           onConfirm={handleDeleteFileConfirm}
+        />
+      ) : null}
+
+      {isMoveItemsOpen ? (
+        <MoveItemsModal
+          albums={albums}
+          selectedCount={selectedItemIds.length}
+          targetAlbumId={moveItemsTargetAlbumId}
+          isMoving={isMovingItems}
+          error={moveItemsError}
+          onChangeTargetAlbumId={(albumId) => {
+            setMoveItemsTargetAlbumId(albumId);
+            if (moveItemsError) {
+              setMoveItemsError("");
+            }
+          }}
+          onClose={closeMoveItemsModal}
+          onSubmit={handleMoveItemsSubmit}
         />
       ) : null}
 
@@ -2536,6 +2832,85 @@ export function RenameAlbumModal({
   );
 }
 
+type MoveItemsModalProps = {
+  albums: AlbumRecord[];
+  selectedCount: number;
+  targetAlbumId: string;
+  isMoving: boolean;
+  error: string;
+  onChangeTargetAlbumId: (albumId: string) => void;
+  onClose: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+};
+
+export function MoveItemsModal({
+  albums,
+  selectedCount,
+  targetAlbumId,
+  isMoving,
+  error,
+  onChangeTargetAlbumId,
+  onClose,
+  onSubmit,
+}: MoveItemsModalProps) {
+  return (
+    <BaseModal
+      rootClassName="album-modal-root"
+      backdropClassName="album-modal-backdrop"
+      panelClassName="album-modal move-items-modal"
+      ariaLabel="Move selected files"
+      showCloseButton
+      closeButtonClassName="album-modal-close"
+      closeButtonAriaLabel="Close file move"
+      onClose={onClose}
+    >
+      <form className="move-items-modal-content" onSubmit={(event) => void onSubmit(event)}>
+        <div className="album-modal-header">
+          <h2>Move files</h2>
+          <p>Choose which folder should receive the selected files.</p>
+        </div>
+
+        <div className="move-items-summary">
+          <span>{selectedCount} selected</span>
+        </div>
+
+        <div className="move-items-folder-list scrollable-y subtle-scrollbar content-scrollbar-host" role="radiogroup" aria-label="Destination folder">
+          {albums.map((album) => (
+            <label key={album.id} className={`move-items-folder ${targetAlbumId === album.id ? "selected" : ""}`}>
+              <input
+                type="radio"
+                name="move-items-target"
+                value={album.id}
+                checked={targetAlbumId === album.id}
+                onChange={() => onChangeTargetAlbumId(album.id)}
+                disabled={isMoving}
+              />
+              <span className="move-items-folder-icon" aria-hidden="true">
+                <FolderIcon />
+              </span>
+              <span className="move-items-folder-copy">
+                <span className="move-items-folder-name">{album.name}</span>
+                <small>{album.itemCount} file{album.itemCount === 1 ? "" : "s"}</small>
+              </span>
+            </label>
+          ))}
+        </div>
+
+        {error ? <span className="album-modal-error">{error}</span> : null}
+
+        <div className="delete-album-modal-actions">
+          <button type="button" className="pill-button secondary-button delete-album-modal-cancel" onClick={onClose} disabled={isMoving}>
+            Cancel
+          </button>
+          <button type="submit" className="pill-button accent-button delete-album-modal-confirm" disabled={isMoving || !targetAlbumId}>
+            {isMoving ? "Moving..." : "Move"}
+          </button>
+        </div>
+      </form>
+    </BaseModal>
+  );
+}
+
 export type AuthSetupStep = "login" | "waiting" | "select-server" | "invite-bot" | "apply-server" | "local-storage";
 
 type AuthSetupModalProps = {
@@ -2852,7 +3227,11 @@ type BulkActionBarProps = {
   isBusy: boolean;
   isTrashSelection: boolean;
   isAllSelectedFavorite: boolean;
+  canMove: boolean;
+  canRemoveFromAlbum: boolean;
   onToggleFavorite: () => void;
+  onMove: () => void;
+  onRemoveFromAlbum: () => void;
   onMoveToTrash: () => void;
   onRestore: () => void;
   onClearSelection: () => void;
@@ -2863,7 +3242,11 @@ export function BulkActionBar({
   isBusy,
   isTrashSelection,
   isAllSelectedFavorite,
+  canMove,
+  canRemoveFromAlbum,
   onToggleFavorite,
+  onMove,
+  onRemoveFromAlbum,
   onMoveToTrash,
   onRestore,
   onClearSelection,
@@ -2920,15 +3303,31 @@ export function BulkActionBar({
 
           <button
             type="button"
-            className="bulk-action-button disabled"
-            disabled
-            title="Bulk move to album will be enabled when album membership endpoints are ready."
+            className="bulk-action-button"
+            onClick={onMove}
+            disabled={isBusy || !canMove}
+            title={canMove ? "Move selected items to a folder" : "Create a folder before moving files"}
           >
             <span className="bulk-action-icon" aria-hidden="true">
               <FolderStackIcon />
             </span>
             <span className="bulk-action-label">Move</span>
           </button>
+
+          {canRemoveFromAlbum ? (
+            <button
+              type="button"
+              className="bulk-action-button"
+              onClick={onRemoveFromAlbum}
+              disabled={isBusy}
+              title="Remove selected items from this folder"
+            >
+              <span className="bulk-action-icon" aria-hidden="true">
+                <CloseSmallIcon />
+              </span>
+              <span className="bulk-action-label">Remove</span>
+            </button>
+          ) : null}
 
           <button
             type="button"
@@ -3107,6 +3506,9 @@ type GalleryProps = {
   items: LibraryItem[];
   attachmentWarnings: DiscasaAttachmentRecoveryWarning[];
   selectedItemIds: string[];
+  draggingItemIds: string[];
+  currentAlbumId: string | null;
+  canMoveSelectedItems: boolean;
   isBusy: boolean;
   isDraggingFiles: boolean;
   galleryDisplayMode: GalleryDisplayMode;
@@ -3126,7 +3528,13 @@ type GalleryProps = {
   onDrop: (event: DragEvent<HTMLElement>) => Promise<void>;
   onStartItemDrag: (event: DragEvent<HTMLElement>, itemId: string) => void;
   onEndItemDrag: () => void;
+  onBeginInternalItemDrag: (itemIds: string[]) => void;
+  onMoveInternalItemDrag: (albumId: string | null) => void;
+  onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
+  onCancelInternalItemDrag: () => void;
   onToggleFavorite: (itemId: string) => Promise<void>;
+  onOpenMoveItemsModal: () => void;
+  onRemoveItemsFromAlbum: (albumId: string, itemIds: string[]) => Promise<void>;
   onMoveToTrash: (itemId: string) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
   onSaveMediaEdit: (itemId: string, input: SaveLibraryItemMediaEditInput) => Promise<LibraryItem>;
@@ -3162,12 +3570,29 @@ type SelectionSession = {
   hasExceededThreshold: boolean;
 };
 
+type InternalItemDragSession = {
+  itemId: string;
+  itemIds: string[];
+  items: LibraryItem[];
+  startClientX: number;
+  startClientY: number;
+  hasStarted: boolean;
+  hoveredAlbumId: string | null;
+};
+
+type InternalItemDragPreviewState = {
+  items: LibraryItem[];
+  clientX: number;
+  clientY: number;
+};
+
 type GalleryGridProps = {
   items: LibraryItem[];
   isBusy: boolean;
   displayMode: GalleryDisplayMode;
   thumbnailSize: number;
   selectedItemIds: string[];
+  draggingItemIds: string[];
   onSelectItem: (itemId: string, options: { range: boolean; toggle: boolean }) => void;
   onOpenItem: (itemId: string) => void;
   onClearSelection: () => void;
@@ -3175,16 +3600,22 @@ type GalleryGridProps = {
   renderItemActions: (item: LibraryItem) => ReactNode;
   onStartItemDrag: (event: DragEvent<HTMLElement>, itemId: string) => void;
   onEndItemDrag: () => void;
+  onBeginInternalItemDrag: (itemIds: string[]) => void;
+  onMoveInternalItemDrag: (albumId: string | null) => void;
+  onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
+  onCancelInternalItemDrag: () => void;
   onRequestUpload: () => void;
 };
 
 type GalleryItemProps = {
   item: LibraryItem;
   isSelected: boolean;
+  isDragging: boolean;
   displayMode: GalleryDisplayMode;
   actions: ReactNode;
   onClick: (event: ReactMouseEvent<HTMLElement>, itemId: string) => void;
   onDoubleClick: (itemId: string) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>, item: LibraryItem) => void;
   onDragStart: (event: DragEvent<HTMLElement>, itemId: string) => void;
   onDragEnd: () => void;
   onRegisterElement: (itemId: string, element: HTMLElement | null) => void;
@@ -3342,6 +3773,39 @@ function createLibraryItemDragPreview(items: LibraryItem[]): HTMLElement {
 
   document.body.appendChild(preview);
   return preview;
+}
+
+function DragStackPreview({ items, clientX, clientY }: InternalItemDragPreviewState) {
+  return (
+    <div
+      className="drag-stack-preview"
+      aria-hidden="true"
+      style={{
+        left: `${clientX - 36}px`,
+        top: `${clientY - 36}px`,
+      }}
+    >
+      {items.slice(0, 4).map((item, index) => {
+        const previewUrl = getLibraryItemThumbnailUrl(item);
+
+        return (
+          <div
+            key={item.id}
+            className="drag-stack-preview-tile"
+            style={{ "--stack-index": String(index) } as CSSProperties}
+          >
+            {isImage(item) && item.attachmentStatus !== "missing" && !previewUrl.startsWith("mock://") ? (
+              <img src={previewUrl} alt="" />
+            ) : (
+              <span>{getFileExtension(item.name)}</span>
+            )}
+          </div>
+        );
+      })}
+
+      {items.length > 1 ? <span className="drag-stack-preview-count">{items.length}</span> : null}
+    </div>
+  );
 }
 
 function formatVideoDuration(seconds: number): string {
@@ -3573,10 +4037,12 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
 function GalleryItem({
   item,
   isSelected,
+  isDragging,
   displayMode,
   actions,
   onClick,
   onDoubleClick,
+  onPointerDown,
   onDragStart,
   onDragEnd,
   onRegisterElement,
@@ -3584,9 +4050,10 @@ function GalleryItem({
   return (
     <article
       ref={(element) => onRegisterElement(item.id, element)}
-      className={`file-tile mode-${displayMode} ${isSelected ? "selected" : ""}`}
+      className={`file-tile mode-${displayMode} ${isSelected ? "selected" : ""} ${isDragging ? "dragging" : ""}`}
       title={item.name}
-      draggable={!item.isTrashed}
+      draggable={false}
+      onPointerDown={(event) => onPointerDown(event, item)}
       onClick={(event) => onClick(event, item.id)}
       onDoubleClick={() => onDoubleClick(item.id)}
       onDragStart={(event) => onDragStart(event, item.id)}
@@ -3607,6 +4074,7 @@ function GalleryGrid({
   displayMode,
   thumbnailSize,
   selectedItemIds,
+  draggingItemIds,
   onSelectItem,
   onOpenItem,
   onClearSelection,
@@ -3614,14 +4082,22 @@ function GalleryGrid({
   renderItemActions,
   onStartItemDrag,
   onEndItemDrag,
+  onBeginInternalItemDrag,
+  onMoveInternalItemDrag,
+  onCompleteInternalItemDrag,
+  onCancelInternalItemDrag,
   onRequestUpload,
 }: GalleryGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const itemElementMapRef = useRef(new Map<string, HTMLElement>());
   const selectionSessionRef = useRef<SelectionSession | null>(null);
+  const internalDragSessionRef = useRef<InternalItemDragSession | null>(null);
+  const suppressNextItemClickRef = useRef(false);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+  const [internalDragPreview, setInternalDragPreview] = useState<InternalItemDragPreviewState | null>(null);
 
   const selectedItemIdSet = new Set(selectedItemIds);
+  const draggingItemIdSet = new Set(draggingItemIds);
 
   function setItemElement(itemId: string, element: HTMLElement | null): void {
     if (element) {
@@ -3633,6 +4109,13 @@ function GalleryGrid({
   }
 
   function handleItemClick(event: ReactMouseEvent<HTMLElement>, itemId: string): void {
+    if (suppressNextItemClickRef.current) {
+      suppressNextItemClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     onSelectItem(itemId, {
       range: event.shiftKey,
       toggle: event.ctrlKey || event.metaKey,
@@ -3645,6 +4128,151 @@ function GalleryGrid({
     }
 
     onOpenItem(itemId);
+  }
+
+  function getInternalDragPayload(item: LibraryItem): { itemIds: string[]; items: LibraryItem[] } {
+    const selectedIdSet = new Set(selectedItemIds);
+    const candidateIds = selectedIdSet.has(item.id) ? selectedItemIds : [item.id];
+    const visibleItemsById = new Map(items.map((entry) => [entry.id, entry]));
+    const draggedItems = candidateIds
+      .map((candidateId) => visibleItemsById.get(candidateId) ?? null)
+      .filter((entry): entry is LibraryItem => Boolean(entry && !entry.isTrashed));
+
+    return {
+      itemIds: draggedItems.map((entry) => entry.id),
+      items: draggedItems,
+    };
+  }
+
+  function finishInternalItemDrag(albumId: string | null): void {
+    const session = internalDragSessionRef.current;
+
+    if (!session) {
+      setInternalDragPreview(null);
+      onCancelInternalItemDrag();
+      return;
+    }
+
+    internalDragSessionRef.current = null;
+    setInternalDragPreview(null);
+    onMoveInternalItemDrag(null);
+
+    if (session.hasStarted) {
+      suppressNextItemClickRef.current = true;
+      window.setTimeout(() => {
+        suppressNextItemClickRef.current = false;
+      }, 0);
+    }
+
+    if (session.hasStarted && albumId) {
+      onCompleteInternalItemDrag(albumId, session.itemIds);
+      return;
+    }
+
+    onCancelInternalItemDrag();
+  }
+
+  function handleItemPointerDown(event: ReactPointerEvent<HTMLElement>, item: LibraryItem): void {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+
+    if (
+      event.button !== 0 ||
+      isBusy ||
+      item.isTrashed ||
+      target?.closest("button, a, input, textarea, select, [data-drag-disabled='true']")
+    ) {
+      return;
+    }
+
+    const payload = getInternalDragPayload(item);
+    if (!payload.itemIds.length) {
+      return;
+    }
+
+    const sourceElement = event.currentTarget;
+    const pointerId = event.pointerId;
+
+    try {
+      sourceElement.setPointerCapture(pointerId);
+    } catch {}
+
+    internalDragSessionRef.current = {
+      itemId: item.id,
+      itemIds: payload.itemIds,
+      items: payload.items,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      hasStarted: false,
+      hoveredAlbumId: null,
+    };
+
+    const handleWindowPointerMove = (moveEvent: PointerEvent) => {
+      const session = internalDragSessionRef.current;
+      if (!session) {
+        return;
+      }
+
+      const deltaX = Math.abs(moveEvent.clientX - session.startClientX);
+      const deltaY = Math.abs(moveEvent.clientY - session.startClientY);
+      const hasExceededThreshold = deltaX >= SELECTION_DRAG_THRESHOLD || deltaY >= SELECTION_DRAG_THRESHOLD;
+
+      if (!session.hasStarted && !hasExceededThreshold) {
+        return;
+      }
+
+      if (!session.hasStarted) {
+        session.hasStarted = true;
+        moveEvent.preventDefault();
+        suppressNextItemClickRef.current = true;
+
+        if (!selectedItemIdSet.has(session.itemId)) {
+          onSelectItem(session.itemId, { range: false, toggle: false });
+        }
+
+        onBeginInternalItemDrag(session.itemIds);
+      }
+
+      setInternalDragPreview({
+        items: session.items,
+        clientX: moveEvent.clientX,
+        clientY: moveEvent.clientY,
+      });
+
+      const albumId = findAlbumDropIdAtPoint({ x: moveEvent.clientX, y: moveEvent.clientY });
+      if (session.hoveredAlbumId !== albumId) {
+        session.hoveredAlbumId = albumId;
+        onMoveInternalItemDrag(albumId);
+      }
+    };
+
+    const cleanupWindowListeners = () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel);
+
+      try {
+        if (sourceElement.hasPointerCapture(pointerId)) {
+          sourceElement.releasePointerCapture(pointerId);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    const handleWindowPointerUp = (upEvent: PointerEvent) => {
+      const albumId = findAlbumDropIdAtPoint({ x: upEvent.clientX, y: upEvent.clientY }) ?? internalDragSessionRef.current?.hoveredAlbumId ?? null;
+      cleanupWindowListeners();
+      finishInternalItemDrag(albumId);
+    };
+
+    const handleWindowPointerCancel = () => {
+      cleanupWindowListeners();
+      finishInternalItemDrag(null);
+    };
+
+    window.addEventListener("pointermove", handleWindowPointerMove);
+    window.addEventListener("pointerup", handleWindowPointerUp);
+    window.addEventListener("pointercancel", handleWindowPointerCancel);
   }
 
   function updateSelectionBox(currentClientX: number, currentClientY: number): void {
@@ -3768,10 +4396,12 @@ function GalleryGrid({
           key={item.id}
           item={item}
           isSelected={selectedItemIdSet.has(item.id)}
+          isDragging={draggingItemIdSet.has(item.id)}
           displayMode={displayMode}
           actions={renderItemActions(item)}
           onClick={handleItemClick}
           onDoubleClick={handleItemDoubleClick}
+          onPointerDown={handleItemPointerDown}
           onDragStart={onStartItemDrag}
           onDragEnd={onEndItemDrag}
           onRegisterElement={setItemElement}
@@ -3800,6 +4430,8 @@ function GalleryGrid({
           <span className="empty-state-copy">Drag files from Explorer into this area or click the upload button to add files.</span>
         </button>
       ) : null}
+
+      {internalDragPreview ? <DragStackPreview {...internalDragPreview} /> : null}
     </div>
   );
 }
@@ -3811,6 +4443,9 @@ export function Gallery({
   items,
   attachmentWarnings,
   selectedItemIds,
+  draggingItemIds,
+  currentAlbumId,
+  canMoveSelectedItems,
   isBusy,
   isDraggingFiles,
   galleryDisplayMode,
@@ -3830,7 +4465,13 @@ export function Gallery({
   onDrop,
   onStartItemDrag,
   onEndItemDrag,
+  onBeginInternalItemDrag,
+  onMoveInternalItemDrag,
+  onCompleteInternalItemDrag,
+  onCancelInternalItemDrag,
   onToggleFavorite,
+  onOpenMoveItemsModal,
+  onRemoveItemsFromAlbum,
   onMoveToTrash,
   onRestoreFromTrash,
   onSaveMediaEdit,
@@ -3995,6 +4636,15 @@ export function Gallery({
     }
   }
 
+  async function handleBulkRemoveFromAlbum(): Promise<void> {
+    if (isBusy || selectedItems.length === 0 || !currentAlbumId) {
+      return;
+    }
+
+    const targets = selectedItems.filter((item) => !item.isTrashed && item.albumIds.includes(currentAlbumId));
+    await onRemoveItemsFromAlbum(currentAlbumId, targets.map((item) => item.id));
+  }
+
   function handleOpenViewer(itemId: string): void {
     const index = displayItems.findIndex((item) => item.id === itemId);
 
@@ -4148,8 +4798,14 @@ export function Gallery({
         isBusy={isBusy}
         isTrashSelection={isTrashSelection}
         isAllSelectedFavorite={allSelectedAreFavorite}
+        canMove={canMoveSelectedItems}
+        canRemoveFromAlbum={Boolean(currentAlbumId)}
         onToggleFavorite={() => {
           void handleBulkFavoriteToggle();
+        }}
+        onMove={onOpenMoveItemsModal}
+        onRemoveFromAlbum={() => {
+          void handleBulkRemoveFromAlbum();
         }}
         onMoveToTrash={() => {
           void handleBulkMoveToTrash();
@@ -4202,12 +4858,17 @@ export function Gallery({
         displayMode={galleryDisplayMode}
         thumbnailSize={thumbnailSize}
         selectedItemIds={selectedItemIds}
+        draggingItemIds={draggingItemIds}
         onSelectItem={onSelectItem}
         onOpenItem={handleOpenViewer}
         onClearSelection={onClearSelection}
         onApplySelectionRect={onApplySelectionRect}
         onStartItemDrag={onStartItemDrag}
         onEndItemDrag={onEndItemDrag}
+        onBeginInternalItemDrag={onBeginInternalItemDrag}
+        onMoveInternalItemDrag={onMoveInternalItemDrag}
+        onCompleteInternalItemDrag={onCompleteInternalItemDrag}
+        onCancelInternalItemDrag={onCancelInternalItemDrag}
         onRequestUpload={onRequestUpload}
         renderItemActions={renderThumbnailActions}
       />

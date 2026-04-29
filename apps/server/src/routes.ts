@@ -24,7 +24,9 @@ import {
   getLibraryItem,
   getLibraryItems,
   getLocalStorageStatus,
+  moveLibraryItemsToAlbum,
   renameAlbum,
+  removeLibraryItemsFromAlbum,
   reorderAlbums,
   replaceConfigFromSnapshot,
   replaceDatabaseFromFolderSnapshot,
@@ -194,6 +196,7 @@ function sendLibraryFileSource(
   source: { type: "file"; filePath: string; mimeType: string; fileName: string } | { type: "redirect"; url: string },
 ): void {
   if (source.type === "redirect") {
+    response.setHeader("Cache-Control", "private, max-age=86400");
     response.redirect(source.url);
     return;
   }
@@ -582,6 +585,60 @@ router.put("/albums/:albumId/items", async (request, response, next) => {
     }
 
     const items = addLibraryItemsToAlbum(albumId, itemIds);
+
+    if (!items) {
+      response.status(404).json({ error: "Album not found" });
+      return;
+    }
+
+    await syncRemoteFolderState();
+    response.json({ items, albums: getAlbums() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/albums/:albumId/items/move", async (request, response, next) => {
+  try {
+    const albumId = String(request.params.albumId ?? "");
+    const rawBody = request.body as { itemIds?: unknown };
+    const itemIds = Array.isArray(rawBody.itemIds)
+      ? rawBody.itemIds.filter((entry: unknown): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+
+    if (!albumId || !itemIds.length) {
+      response.status(400).json({ error: "albumId and itemIds are required" });
+      return;
+    }
+
+    const items = moveLibraryItemsToAlbum(albumId, itemIds);
+
+    if (!items) {
+      response.status(404).json({ error: "Album not found" });
+      return;
+    }
+
+    await syncRemoteFolderState();
+    response.json({ items, albums: getAlbums() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/albums/:albumId/items/remove", async (request, response, next) => {
+  try {
+    const albumId = String(request.params.albumId ?? "");
+    const rawBody = request.body as { itemIds?: unknown };
+    const itemIds = Array.isArray(rawBody.itemIds)
+      ? rawBody.itemIds.filter((entry: unknown): entry is string => typeof entry === "string" && entry.length > 0)
+      : [];
+
+    if (!albumId || !itemIds.length) {
+      response.status(400).json({ error: "albumId and itemIds are required" });
+      return;
+    }
+
+    const items = removeLibraryItemsFromAlbum(albumId, itemIds);
 
     if (!items) {
       response.status(404).json({ error: "Album not found" });

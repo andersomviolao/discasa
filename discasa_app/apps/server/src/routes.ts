@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
-import { PermissionsBitField } from "discord.js";
 import type { DiscasaAttachmentRecoveryWarning, SaveLibraryItemMediaEditInput } from "@discasa/shared";
 import { env } from "./config";
 import {
@@ -44,15 +43,13 @@ import {
 } from "./persistence";
 import {
   deleteStoredItemFromDiscord,
-  DiscordAuthorizationError,
+  getDiscasaBotStatus,
   getDiscordUploadLimitForGuild,
-  getUploadTooLargeMessage,
   hasCurrentConfigSnapshot,
   hasCurrentFolderSnapshot,
   hasCurrentIndexSnapshot,
   initializeDiscasaInGuild,
   inspectDiscasaSetup,
-  listEligibleGuilds,
   moveStoredItemToTrash,
   readLatestConfigSnapshot,
   readLatestFolderSnapshot,
@@ -63,12 +60,24 @@ import {
   syncFolderSnapshot,
   syncIndexSnapshot,
   uploadFilesToDiscordDrive,
+} from "./bot-client";
+import {
+  DiscordAuthorizationError,
+  getUploadTooLargeMessage,
+  listEligibleGuilds,
 } from "./discord";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 let remoteLibraryHydrationKey: string | null = null;
 let remoteLibraryHydrationPromise: Promise<void> | null = null;
+const BOT_INVITE_PERMISSIONS =
+  0x400n + // View Channel
+  0x800n + // Send Messages
+  0x8000n + // Attach Files
+  0x10000n + // Read Message History
+  0x10n + // Manage Channels
+  0x10000000n; // Manage Roles
 
 function getRemoteLibraryHydrationKey(context: NonNullable<ReturnType<typeof getActiveStorageContext>>): string {
   return [
@@ -296,6 +305,14 @@ router.get("/session", (request, response) => {
         }
       : null,
   });
+});
+
+router.get("/bot/status", async (_request, response, next) => {
+  try {
+    response.json(await getDiscasaBotStatus());
+  } catch (error) {
+    next(error);
+  }
 });
 
 router.get("/guilds", async (request, response, next) => {
@@ -1149,16 +1166,7 @@ async function getCurrentDiscordUser(accessToken: string): Promise<DiscordUserRe
 }
 
 function buildBotPermissionInteger(): string {
-  const permissions = new PermissionsBitField([
-    PermissionsBitField.Flags.ViewChannel,
-    PermissionsBitField.Flags.SendMessages,
-    PermissionsBitField.Flags.AttachFiles,
-    PermissionsBitField.Flags.ReadMessageHistory,
-    PermissionsBitField.Flags.ManageChannels,
-    PermissionsBitField.Flags.ManageRoles,
-  ]);
-
-  return permissions.bitfield.toString();
+  return BOT_INVITE_PERMISSIONS.toString();
 }
 
 authRouter.get("/discord/login", (request, response) => {

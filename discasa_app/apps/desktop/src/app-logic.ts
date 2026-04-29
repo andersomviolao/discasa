@@ -26,6 +26,16 @@ export type DiscasaSetupStatus = {
   missingChannels: string[];
 };
 
+export type DiscasaBotStatus = {
+  processAvailable: boolean;
+  ok: boolean;
+  mockMode: boolean;
+  botConfigured: boolean;
+  botLoggedIn: boolean;
+  botUserId: string | null;
+  error?: string;
+};
+
 export type HsvColor = {
   hue: number;
   saturation: number;
@@ -513,6 +523,10 @@ export async function getGuilds(): Promise<GuildSummary[]> {
 export async function getDiscasaSetupStatus(guildId: string): Promise<DiscasaSetupStatus> {
   const query = new URLSearchParams({ guildId });
   return requestJson<DiscasaSetupStatus>(`/api/discasa/status?${query.toString()}`);
+}
+
+export async function getDiscasaBotStatus(): Promise<DiscasaBotStatus> {
+  return requestJson<DiscasaBotStatus>("/api/bot/status");
 }
 
 export async function initializeDiscasa(guildId: string): Promise<DiscasaInitializationResponse> {

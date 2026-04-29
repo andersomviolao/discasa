@@ -42,6 +42,7 @@ import {
   deleteLibraryItem,
   getAlbums,
   getAppConfig,
+  getDiscasaBotStatus,
   getDiscasaSetupStatus,
   getGuilds,
   getLibraryItems,
@@ -88,6 +89,7 @@ import {
   VIEWER_WHEEL_BEHAVIOR_EVENT,
   type HsvColor,
   type AlbumContextMenuState,
+  type DiscasaBotStatus,
   type GalleryDisplayMode,
   type MouseWheelBehavior,
   type SettingsSection,
@@ -341,6 +343,7 @@ export function App() {
   const [isBusy, setIsBusy] = useState(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [botStatus, setBotStatus] = useState<DiscasaBotStatus | null>(null);
   const [windowState, setWindowState] = useState<WindowState>("default");
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => readStoredBoolean(SIDEBAR_COLLAPSED_KEY, false));
   const [albumContextMenu, setAlbumContextMenu] = useState<AlbumContextMenuState>(null);
@@ -422,6 +425,16 @@ export function App() {
 
     hasBootstrappedRef.current = true;
     void bootstrap();
+  }, []);
+
+  useEffect(() => {
+    void loadBotStatus();
+
+    const timer = window.setInterval(() => {
+      void loadBotStatus();
+    }, 12000);
+
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -776,6 +789,22 @@ export function App() {
     return nextStatus;
   }
 
+  async function loadBotStatus(): Promise<void> {
+    try {
+      setBotStatus(await getDiscasaBotStatus());
+    } catch {
+      setBotStatus({
+        processAvailable: false,
+        ok: false,
+        mockMode: false,
+        botConfigured: false,
+        botLoggedIn: false,
+        botUserId: null,
+        error: "Could not reach the Discasa backend.",
+      });
+    }
+  }
+
   function scheduleConfigSave(delay = CONFIG_SAVE_DEBOUNCE_MS): void {
     if (configSaveTimerRef.current !== null) {
       window.clearTimeout(configSaveTimerRef.current);
@@ -981,6 +1010,25 @@ export function App() {
     () => guilds.find((guild) => guild.id === selectedGuildId)?.name ?? null,
     [guilds, selectedGuildId],
   );
+  const botWarning = useMemo(() => {
+    if (!botStatus || botStatus.mockMode || botStatus.ok) {
+      return "";
+    }
+
+    if (!botStatus.processAvailable) {
+      return "Discasa bot is unavailable. Synchronization is paused.";
+    }
+
+    if (!botStatus.botConfigured) {
+      return "Discasa bot token is not configured. Synchronization is paused.";
+    }
+
+    if (!botStatus.botLoggedIn) {
+      return "Discasa bot is not logged in. Synchronization is paused.";
+    }
+
+    return "Discasa bot is unavailable. Synchronization is paused.";
+  }, [botStatus]);
 
   useEffect(() => {
     setSelectedItemIds([]);
@@ -2298,7 +2346,7 @@ export function App() {
         onPointerDown={(event) => event.stopPropagation()}
       />
 
-      <StatusToast message={message} error={error} />
+      <StatusToast message={message} error={error} warning={botWarning} />
     </div>
   );
 }
@@ -6212,14 +6260,16 @@ export function Sidebar({
 type StatusToastProps = {
   message: string;
   error: string;
+  warning?: string;
 };
 
-export function StatusToast({ message, error }: StatusToastProps) {
-  if (!message && !error) return null;
+export function StatusToast({ message, error, warning = "" }: StatusToastProps) {
+  if (!message && !error && !warning) return null;
 
   return (
     <div className="status-toast">
       {message ? <span>{message}</span> : null}
+      {warning ? <span className="status-warning">{warning}</span> : null}
       {error ? <span className="status-error">{error}</span> : null}
     </div>
   );

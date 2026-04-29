@@ -2,11 +2,11 @@
 setlocal EnableExtensions
 
 echo ==========================================
-echo Discasa - Stop Servers
+echo Discasa Bot - Stop
 echo ==========================================
 echo.
 
-set "PORTS=3001 5173 1420"
+set "PORTS=3002"
 
 for %%P in (%PORTS%) do (
   call :stop_port %%P

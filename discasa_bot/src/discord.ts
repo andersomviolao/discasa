@@ -15,6 +15,7 @@ import {
 import {
   ChannelType,
   Client,
+  Events,
   GatewayIntentBits,
   Message,
   PermissionsBitField,
@@ -23,7 +24,7 @@ import {
   type OverwriteResolvable,
 } from "discord.js";
 import { env } from "./config";
-import type { ActiveStorageContext, UploadedFileRecord } from "./persistence";
+import type { ActiveStorageContext, UploadedFileRecord } from "./storage-types";
 
 type DiscordUserGuild = {
   id: string;
@@ -107,6 +108,7 @@ const DEFAULT_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
 const LEVEL_TWO_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
 const LEVEL_THREE_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 let botClient: Client | null = null;
+let botClientReadyPromise: Promise<Client> | null = null;
 
 type DiscordGuildMetadata = {
   premium_tier?: number;
@@ -182,11 +184,80 @@ async function getBotClient(): Promise<Client | null> {
   }
 
   if (!botClient) {
-    botClient = new Client({ intents: [GatewayIntentBits.Guilds] });
-    await botClient.login(env.discordBotToken);
+    const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+    botClient = client;
+    botClientReadyPromise = client
+      .login(env.discordBotToken)
+      .then(() => waitForBotClientReady(client))
+      .catch((error) => {
+        if (botClient === client) {
+          botClient = null;
+          botClientReadyPromise = null;
+        }
+
+        throw error;
+      });
   }
 
-  return botClient;
+  return botClientReadyPromise ?? botClient;
+}
+
+async function waitForBotClientReady(client: Client): Promise<Client> {
+  if (client.isReady()) {
+    return client;
+  }
+
+  return new Promise((resolve, reject) => {
+    const handleReady = (readyClient: Client<true>) => {
+      cleanup();
+      resolve(readyClient);
+    };
+    const handleError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      client.off(Events.ClientReady, handleReady);
+      client.off(Events.Error, handleError);
+    };
+
+    client.once(Events.ClientReady, handleReady);
+    client.once(Events.Error, handleError);
+  });
+}
+
+export async function getDiscordBotRuntimeStatus(): Promise<{
+  mockMode: boolean;
+  botConfigured: boolean;
+  botLoggedIn: boolean;
+  botUserId: string | null;
+}> {
+  if (env.mockMode) {
+    return {
+      mockMode: true,
+      botConfigured: true,
+      botLoggedIn: true,
+      botUserId: "mock-bot",
+    };
+  }
+
+  if (!env.discordBotToken) {
+    return {
+      mockMode: false,
+      botConfigured: false,
+      botLoggedIn: false,
+      botUserId: null,
+    };
+  }
+
+  const client = await getBotClient();
+
+  return {
+    mockMode: false,
+    botConfigured: true,
+    botLoggedIn: Boolean(client?.isReady()),
+    botUserId: client?.user?.id ?? null,
+  };
 }
 
 async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {

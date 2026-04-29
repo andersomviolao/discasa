@@ -15,7 +15,7 @@ type Environment = {
   mockMode: boolean;
   discordClientId: string;
   discordClientSecret: string;
-  discordBotToken: string;
+  discordBotUrl: string;
   discordRedirectUri: string;
 };
 
@@ -26,6 +26,6 @@ export const env: Environment = {
   mockMode: String(process.env.MOCK_MODE ?? "true") === "true",
   discordClientId: process.env.DISCORD_CLIENT_ID ?? "",
   discordClientSecret: process.env.DISCORD_CLIENT_SECRET ?? "",
-  discordBotToken: process.env.DISCORD_BOT_TOKEN ?? "",
+  discordBotUrl: process.env.DISCORD_BOT_URL ?? "http://localhost:3002",
   discordRedirectUri: process.env.DISCORD_REDIRECT_URI ?? "http://localhost:3001/auth/discord/callback",
 };

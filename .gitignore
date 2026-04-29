@@ -31,15 +31,15 @@ pnpm-debug.log*
 # Tauri / Rust build artifacts
 target/
 **/target/
-apps/desktop/src-tauri/target/
+discasa_app/apps/desktop/src-tauri/target/
 
 # Tauri generated files
-apps/desktop/src-tauri/gen/
+discasa_app/apps/desktop/src-tauri/gen/
 
 # Local app data / mock data / future cache
 .discasa-data/
 **/.discasa-data/
-apps/server/.discasa-data/
+discasa_app/apps/server/.discasa-data/
 
 # Local databases and temp runtime files
 *.db-wal

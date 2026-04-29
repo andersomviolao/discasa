@@ -9,19 +9,21 @@ This repository is still an internal prototype, so this README focuses on the cu
 Discasa currently includes:
 
 - a Tauri desktop shell with a React interface
-- a local Node.js backend for Discord OAuth, guild setup, uploads, and synchronization
+- a local Node.js backend for Discord OAuth, cache, app state, and desktop API orchestration
 - a shared package for cross-layer types and snapshot contracts
 - mock mode support for UI and flow development
 - Discord-backed persistence for files, folders, trash, and app configuration
 - local cache and optional local file mirroring
 - startup library metadata cache for faster first paint
 
+The Discord bot service now lives separately in the sibling `discasa_bot` folder. The app talks to it through `DISCORD_BOT_URL`, which defaults to `http://localhost:3002`.
+
 ## Architecture
 
 ```text
 apps/
   desktop/   # Tauri + React desktop application
-  server/    # Local Node.js service for OAuth, Discord orchestration, and persistence
+  server/    # Local Node.js service for OAuth, app API, cache, and persistence orchestration
 packages/
   shared/    # Shared types, constants, and snapshot contracts
 art/         # Visual/project assets
@@ -96,6 +98,7 @@ The server still recognizes the old prototype folder at `apps\server\.discasa-da
 - Discasa initialization inside the selected guild
 - upload size validation against Discord limits
 - synchronization of index, folder, trash, and app config snapshots back to Discord
+- backend bot status endpoint for detecting whether the local bot service is available
 
 ### Local Development Support
 
@@ -108,9 +111,17 @@ The server still recognizes the old prototype folder at `apps\server\.discasa-da
 
 ## Development Scripts
 
-- `start-discasa.bat` starts the backend and Tauri desktop app for local development.
-- `stop-discasa-servers.bat` stops local processes listening on Discasa development ports.
-- `start-discasa-hard-reset.bat` removes generated development artifacts, current AppData runtime folders, legacy Tauri folders, and legacy prototype storage.
+- `start.bat` starts the backend and Tauri desktop app for local development.
+- `stop.bat` stops local app processes listening on Discasa development ports.
+- `..\hard-reset.bat` removes generated artifacts for the app and bot, current AppData runtime folders, legacy Tauri folders, and legacy prototype storage.
+
+Start the bot separately from `..\discasa_bot\start.bat` before using Discord-backed synchronization.
+
+The development ports are:
+
+- `3001` - local Discasa backend
+- `3002` - sibling Discasa Discord bot service
+- `1420` / `5173` - Tauri/Vite desktop development surfaces
 
 The hard reset script does not delete Discord server channels or cloud snapshots.
 
@@ -121,7 +132,6 @@ The hard reset script does not delete Discord server channels or cloud snapshots
 - Vite
 - Tauri 2
 - Node.js + Express
-- discord.js
 - Rust
 - CSS
 

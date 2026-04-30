@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,8 @@ import {
   type LibraryItemIndex,
   type LibraryItemOriginalSource,
   type LibraryItemSavedMediaEdit,
+  type LibraryItemStorageManifest,
+  type LibraryItemStoragePart,
   type LocalStorageStatus,
   type PersistedConfigSnapshot,
   type PersistedFolderSnapshot,
@@ -49,6 +52,7 @@ export type UploadedFileRecord = {
   attachmentUrl: string;
   storageChannelId?: string;
   storageMessageId?: string;
+  storageManifest?: LibraryItemStorageManifest | null;
 };
 
 type LegacyPersistedAlbum = {
@@ -394,6 +398,10 @@ function normalizeDiscasaConfig(raw: unknown): DiscasaConfig {
     galleryDisplayMode: entry.galleryDisplayMode === "square" ? "square" : fallback.galleryDisplayMode,
     viewerMouseWheelBehavior:
       entry.viewerMouseWheelBehavior === "navigate" ? "navigate" : fallback.viewerMouseWheelBehavior,
+    mediaPreviewVolume:
+      typeof entry.mediaPreviewVolume === "number" && Number.isFinite(entry.mediaPreviewVolume)
+        ? Math.min(1, Math.max(0, entry.mediaPreviewVolume))
+        : fallback.mediaPreviewVolume,
     sidebarCollapsed: typeof entry.sidebarCollapsed === "boolean" ? entry.sidebarCollapsed : fallback.sidebarCollapsed,
     localMirrorEnabled:
       typeof entry.localMirrorEnabled === "boolean" ? entry.localMirrorEnabled : fallback.localMirrorEnabled,
@@ -487,6 +495,84 @@ function normalizeFolderMembership(raw: unknown): PersistedFolderMembership | nu
   };
 }
 
+function normalizeStoragePart(raw: unknown): LibraryItemStoragePart | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const entry = raw as Record<string, unknown>;
+  if (
+    typeof entry.index !== "number" ||
+    !Number.isInteger(entry.index) ||
+    entry.index < 0 ||
+    typeof entry.fileName !== "string" ||
+    entry.fileName.length === 0 ||
+    typeof entry.size !== "number" ||
+    entry.size < 0 ||
+    typeof entry.sha256 !== "string" ||
+    typeof entry.attachmentUrl !== "string" ||
+    entry.attachmentUrl.length === 0 ||
+    typeof entry.storageChannelId !== "string" ||
+    entry.storageChannelId.length === 0 ||
+    typeof entry.storageMessageId !== "string" ||
+    entry.storageMessageId.length === 0
+  ) {
+    return null;
+  }
+
+  return {
+    index: entry.index,
+    fileName: entry.fileName,
+    size: entry.size,
+    sha256: entry.sha256,
+    attachmentUrl: entry.attachmentUrl,
+    storageChannelId: entry.storageChannelId,
+    storageMessageId: entry.storageMessageId,
+  };
+}
+
+function normalizeStorageManifest(raw: unknown): LibraryItemStorageManifest | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const entry = raw as Record<string, unknown>;
+  if (
+    entry.mode !== "chunked" ||
+    entry.version !== 1 ||
+    typeof entry.chunkSize !== "number" ||
+    entry.chunkSize <= 0 ||
+    typeof entry.totalChunks !== "number" ||
+    !Number.isInteger(entry.totalChunks) ||
+    entry.totalChunks <= 0 ||
+    typeof entry.totalSize !== "number" ||
+    entry.totalSize < 0 ||
+    typeof entry.sha256 !== "string" ||
+    !Array.isArray(entry.parts)
+  ) {
+    return null;
+  }
+
+  const parts = entry.parts
+    .map((part) => normalizeStoragePart(part))
+    .filter((part): part is LibraryItemStoragePart => Boolean(part))
+    .sort((left, right) => left.index - right.index);
+
+  if (parts.length !== entry.totalChunks || parts.some((part, index) => part.index !== index)) {
+    return null;
+  }
+
+  return {
+    mode: "chunked",
+    version: 1,
+    chunkSize: entry.chunkSize,
+    totalChunks: entry.totalChunks,
+    totalSize: entry.totalSize,
+    sha256: entry.sha256,
+    parts,
+  };
+}
+
 function normalizeOriginalSource(raw: unknown): LibraryItemOriginalSource | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -503,6 +589,7 @@ function normalizeOriginalSource(raw: unknown): LibraryItemOriginalSource | null
       typeof entry.storageChannelId === "string" && entry.storageChannelId.length > 0 ? entry.storageChannelId : undefined,
     storageMessageId:
       typeof entry.storageMessageId === "string" && entry.storageMessageId.length > 0 ? entry.storageMessageId : undefined,
+    storageManifest: normalizeStorageManifest(entry.storageManifest),
   };
 }
 
@@ -568,6 +655,7 @@ function normalizeLibraryItemIndex(raw: unknown): PersistedItem | null {
     isTrashed: entry.isTrashed,
     storageChannelId: typeof entry.storageChannelId === "string" && entry.storageChannelId.length > 0 ? entry.storageChannelId : undefined,
     storageMessageId: typeof entry.storageMessageId === "string" && entry.storageMessageId.length > 0 ? entry.storageMessageId : undefined,
+    storageManifest: normalizeStorageManifest(entry.storageManifest),
     originalSource: normalizeOriginalSource(entry.originalSource),
     savedMediaEdit: normalizeSavedMediaEdit(entry.savedMediaEdit),
   };
@@ -611,6 +699,7 @@ function normalizeLegacyHydratedLibraryItem(raw: unknown): LibraryItem | null {
     isTrashed: entry.isTrashed,
     storageChannelId: typeof entry.storageChannelId === "string" && entry.storageChannelId.length > 0 ? entry.storageChannelId : undefined,
     storageMessageId: typeof entry.storageMessageId === "string" && entry.storageMessageId.length > 0 ? entry.storageMessageId : undefined,
+    storageManifest: normalizeStorageManifest(entry.storageManifest),
     originalSource: normalizeOriginalSource(entry.originalSource),
     savedMediaEdit: normalizeSavedMediaEdit(entry.savedMediaEdit),
   };
@@ -853,6 +942,16 @@ function isDownloadableAttachmentUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+function hasChunkedStorage(item: Pick<PersistedItem, "storageManifest">): item is Pick<PersistedItem, "storageManifest"> & {
+  storageManifest: LibraryItemStorageManifest;
+} {
+  return item.storageManifest?.mode === "chunked";
+}
+
+function hashBuffer(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
 function findPersistedItem(itemId: string): PersistedItem | null {
   return database.items.find((item) => item.id === itemId) ?? null;
 }
@@ -896,24 +995,67 @@ function moveLocalMirrorFiles(previousRootPath: string, nextRootPath: string): v
   }
 }
 
-async function downloadAttachmentToFile(url: string, filePath: string): Promise<boolean> {
+async function downloadAttachmentBuffer(url: string): Promise<Buffer | null> {
   if (!isDownloadableAttachmentUrl(url)) {
-    return false;
+    return null;
   }
 
   try {
     const response = await fetch(url);
     if (!response.ok) {
+      return null;
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } catch (error) {
+    console.warn("[Discasa local cache] Could not download a file from Discord.", error);
+    return null;
+  }
+}
+
+async function downloadAttachmentToFile(url: string, filePath: string): Promise<boolean> {
+  const buffer = await downloadAttachmentBuffer(url);
+  if (!buffer) {
+    return false;
+  }
+
+  writeManagedFile(filePath, buffer);
+  return true;
+}
+
+async function materializeChunkedItemToFile(item: PersistedItem, filePath: string): Promise<boolean> {
+  if (!hasChunkedStorage(item)) {
+    return false;
+  }
+
+  const buffers: Buffer[] = [];
+
+  for (const part of item.storageManifest.parts) {
+    const buffer = await downloadAttachmentBuffer(part.attachmentUrl);
+    if (!buffer || buffer.byteLength !== part.size || hashBuffer(buffer) !== part.sha256) {
+      removeFileIfExists(filePath);
       return false;
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-    writeManagedFile(filePath, buffer);
-    return true;
-  } catch (error) {
-    console.warn("[Discasa local cache] Could not download a file from Discord.", error);
+    buffers.push(buffer);
+  }
+
+  const fullBuffer = Buffer.concat(buffers);
+  if (fullBuffer.byteLength !== item.storageManifest.totalSize || hashBuffer(fullBuffer) !== item.storageManifest.sha256) {
+    removeFileIfExists(filePath);
     return false;
   }
+
+  writeManagedFile(filePath, fullBuffer);
+  return true;
+}
+
+async function materializeItemToFile(item: PersistedItem, filePath: string): Promise<boolean> {
+  if (hasChunkedStorage(item)) {
+    return materializeChunkedItemToFile(item, filePath);
+  }
+
+  return downloadAttachmentToFile(item.attachmentUrl, filePath);
 }
 
 async function synchronizeLocalMirrorFromCloud(): Promise<void> {
@@ -938,7 +1080,7 @@ async function synchronizeLocalMirrorFromCloud(): Promise<void> {
       continue;
     }
 
-    await downloadAttachmentToFile(item.attachmentUrl, filePath);
+    await materializeItemToFile(item, filePath);
   }
 }
 
@@ -1073,6 +1215,7 @@ function createStoredLibraryItem(file: UploadedFileRecord): PersistedItem {
     isTrashed: false,
     storageChannelId: file.storageChannelId,
     storageMessageId: file.storageMessageId,
+    storageManifest: file.storageManifest ?? null,
   };
 }
 
@@ -1093,6 +1236,7 @@ function createOriginalSourceFromPersistedItem(item: PersistedItem): LibraryItem
     attachmentUrl: item.originalSource?.attachmentUrl ?? item.attachmentUrl,
     storageChannelId: item.originalSource?.storageChannelId ?? item.storageChannelId,
     storageMessageId: item.originalSource?.storageMessageId ?? item.storageMessageId,
+    storageManifest: item.originalSource?.storageManifest ?? item.storageManifest ?? null,
   };
 }
 
@@ -1358,9 +1502,9 @@ export function cacheUploadedFilesForLocalAccess(items: LibraryItem[], files: Ex
   });
 }
 
-export function getLibraryItemContentSource(
+export async function getLibraryItemContentSource(
   itemId: string,
-): { type: "file"; filePath: string; mimeType: string; fileName: string } | { type: "redirect"; url: string } | null {
+): Promise<{ type: "file"; filePath: string; mimeType: string; fileName: string } | { type: "redirect"; url: string } | null> {
   const item = findPersistedItem(itemId);
   if (!item) {
     return null;
@@ -1368,6 +1512,15 @@ export function getLibraryItemContentSource(
 
   const localMirrorPath = getLocalMirrorFilePath(item);
   if (hasReadableFile(localMirrorPath)) {
+    return {
+      type: "file",
+      filePath: localMirrorPath,
+      mimeType: item.mimeType,
+      fileName: item.name,
+    };
+  }
+
+  if (hasChunkedStorage(item) && await materializeChunkedItemToFile(item, localMirrorPath)) {
     return {
       type: "file",
       filePath: localMirrorPath,
@@ -1423,7 +1576,7 @@ export async function getLibraryItemThumbnailSource(
     }
   }
 
-  if (await downloadAttachmentToFile(item.attachmentUrl, cachedPath)) {
+  if (await materializeItemToFile(item, cachedPath)) {
     return {
       type: "file",
       filePath: cachedPath,
@@ -1594,7 +1747,7 @@ export function removeLibraryItemsFromAlbum(albumId: string, itemIds: string[]):
 
 export function updateLibraryItemStorage(
   itemId: string,
-  nextStorage: Pick<UploadedFileRecord, "attachmentUrl" | "storageChannelId" | "storageMessageId" | "guildId">,
+  nextStorage: Pick<UploadedFileRecord, "attachmentUrl" | "storageChannelId" | "storageMessageId" | "guildId" | "storageManifest">,
 ): LibraryItem | null {
   const item = database.items.find((entry) => entry.id === itemId);
   if (!item) {
@@ -1606,12 +1759,14 @@ export function updateLibraryItemStorage(
   item.attachmentStatus = "ready";
   item.storageChannelId = nextStorage.storageChannelId;
   item.storageMessageId = nextStorage.storageMessageId;
+  item.storageManifest = nextStorage.storageManifest ?? null;
 
   if (item.originalSource) {
     item.originalSource = {
       attachmentUrl: nextStorage.attachmentUrl,
       storageChannelId: nextStorage.storageChannelId,
       storageMessageId: nextStorage.storageMessageId,
+      storageManifest: nextStorage.storageManifest ?? null,
     };
   }
 

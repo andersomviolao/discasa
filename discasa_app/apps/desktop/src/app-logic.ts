@@ -290,12 +290,45 @@ export function isVideo(item: LibraryItem): boolean {
   return item.mimeType.startsWith("video/");
 }
 
+export function isAudio(item: LibraryItem): boolean {
+  return item.mimeType.startsWith("audio/");
+}
+
 export function isOther(item: LibraryItem): boolean {
   return !isImage(item) && !isVideo(item);
 }
 
 export function getLibraryItemContentUrl(item: LibraryItem): string {
   return item.contentUrl ?? item.attachmentUrl;
+}
+
+function sanitizeDownloadName(name: string): string {
+  const fallbackName = "discasa-file";
+  const sanitized = name.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim();
+  return sanitized || fallbackName;
+}
+
+export async function downloadLibraryItems(items: LibraryItem[]): Promise<void> {
+  for (const item of items) {
+    const response = await fetch(getLibraryItemContentUrl(item), { credentials: "include" });
+
+    if (!response.ok) {
+      throw new Error(`Could not download ${item.name}.`);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+
+    anchor.href = objectUrl;
+    anchor.download = sanitizeDownloadName(item.name);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+
+    await new Promise((resolve) => window.setTimeout(resolve, 120));
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 export function getLibraryItemThumbnailUrl(item: LibraryItem): string {

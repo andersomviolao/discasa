@@ -44,7 +44,6 @@ import {
 import {
   deleteStoredItemFromDiscord,
   getDiscasaBotStatus,
-  getDiscordUploadLimitForGuild,
   hasCurrentConfigSnapshot,
   hasCurrentFolderSnapshot,
   hasCurrentIndexSnapshot,
@@ -63,7 +62,6 @@ import {
 } from "./bot-client";
 import {
   DiscordAuthorizationError,
-  getUploadTooLargeMessage,
   listEligibleGuilds,
 } from "./discord";
 
@@ -678,10 +676,10 @@ router.get("/library", async (_request, response, next) => {
   }
 });
 
-router.get("/library/:itemId/content", (request, response, next) => {
+router.get("/library/:itemId/content", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
-    const source = getLibraryItemContentSource(itemId);
+    const source = await getLibraryItemContentSource(itemId);
 
     if (!source) {
       response.status(404).json({ error: "Library item content is not available." });
@@ -732,16 +730,6 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
 
     if (!activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before uploading files." });
-      return;
-    }
-
-    const uploadLimitBytes = await getDiscordUploadLimitForGuild(activeStorage.guildId);
-    const oversizedFiles = files.filter((file) => file.size > uploadLimitBytes);
-
-    if (oversizedFiles.length > 0) {
-      response.status(413).json({
-        error: getUploadTooLargeMessage(oversizedFiles, uploadLimitBytes),
-      });
       return;
     }
 

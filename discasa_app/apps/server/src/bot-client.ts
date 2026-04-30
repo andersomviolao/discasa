@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import type {
   DiscasaAttachmentRecoveryWarning,
   LibraryItem,
+  LibraryItemStorageManifest,
+  LibraryItemStoragePart,
   PersistedConfigSnapshot,
   PersistedFolderSnapshot,
   PersistedIndexSnapshot,
@@ -39,6 +42,16 @@ type SnapshotKind = "index" | "folder" | "config";
 type BotErrorPayload = {
   error?: string;
 };
+
+type UploadableFile = {
+  originalname: string;
+  mimetype: string;
+  buffer: Buffer;
+  size: number;
+};
+
+const CHUNK_UPLOAD_SAFETY_BYTES = 512 * 1024;
+const MIN_CHUNK_SIZE_BYTES = 1024 * 1024;
 
 function getBotBaseUrl(): string {
   return env.discordBotUrl.replace(/\/+$/, "");
@@ -82,6 +95,43 @@ function toJsonBody(payload: unknown): RequestInit {
   };
 }
 
+function getChunkSize(uploadLimitBytes: number): number {
+  return Math.min(uploadLimitBytes, Math.max(MIN_CHUNK_SIZE_BYTES, uploadLimitBytes - CHUNK_UPLOAD_SAFETY_BYTES));
+}
+
+function hashBuffer(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function formatChunkFileName(fileName: string, index: number, totalChunks: number): string {
+  const width = Math.max(4, String(totalChunks).length);
+  return `${fileName}.discasa.part${String(index + 1).padStart(width, "0")}`;
+}
+
+function hasChunkedStorage(item: Pick<LibraryItem, "storageManifest">): item is Pick<LibraryItem, "storageManifest"> & {
+  storageManifest: LibraryItemStorageManifest;
+} {
+  return item.storageManifest?.mode === "chunked";
+}
+
+function toUploadableFile(file: Express.Multer.File): UploadableFile {
+  return {
+    originalname: file.originalname,
+    mimetype: file.mimetype || "application/octet-stream",
+    buffer: Buffer.from(file.buffer),
+    size: file.size,
+  };
+}
+
+async function downloadAttachmentBuffer(attachmentUrl: string): Promise<Buffer> {
+  const response = await fetch(attachmentUrl);
+  if (!response.ok) {
+    throw new Error("Failed to download the stored Discord attachment.");
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
 export async function getDiscasaBotStatus(): Promise<DiscasaBotStatus> {
   try {
     const status = await requestBotJson<Omit<DiscasaBotStatus, "processAvailable">>("/health");
@@ -121,12 +171,14 @@ export async function getDiscordUploadLimitForGuild(guildId: string): Promise<nu
   return payload.uploadLimitBytes;
 }
 
-export async function uploadFilesToDiscordDrive(
-  files: Express.Multer.File[],
+async function uploadFilesToDiscordChannel(
+  files: UploadableFile[],
   context: ActiveStorageContext,
+  targetChannelId: string,
 ): Promise<UploadedFileRecord[]> {
   const body = new FormData();
   body.append("context", JSON.stringify(context));
+  body.append("targetChannelId", targetChannelId);
 
   for (const file of files) {
     const bytes = new Uint8Array(file.buffer);
@@ -139,6 +191,108 @@ export async function uploadFilesToDiscordDrive(
     body,
   });
   return payload.records;
+}
+
+async function uploadSingleFileToDiscordChannel(
+  file: UploadableFile,
+  context: ActiveStorageContext,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  const [record] = await uploadFilesToDiscordChannel([file], context, targetChannelId);
+  if (!record) {
+    throw new Error(`Discord did not return an upload record for ${file.originalname}.`);
+  }
+
+  return {
+    ...record,
+    fileSize: file.size,
+    storageManifest: null,
+  };
+}
+
+async function uploadChunkedFileToDiscordChannel(
+  file: UploadableFile,
+  context: ActiveStorageContext,
+  targetChannelId: string,
+  uploadLimitBytes: number,
+): Promise<UploadedFileRecord> {
+  const chunkSize = getChunkSize(uploadLimitBytes);
+  const totalChunks = Math.ceil(file.buffer.byteLength / chunkSize);
+  const parts: LibraryItemStoragePart[] = [];
+
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * chunkSize;
+    const end = Math.min(start + chunkSize, file.buffer.byteLength);
+    const chunkBuffer = file.buffer.subarray(start, end);
+    const partName = formatChunkFileName(file.originalname, index, totalChunks);
+    const uploadedPart = await uploadSingleFileToDiscordChannel(
+      {
+        originalname: partName,
+        mimetype: "application/octet-stream",
+        buffer: chunkBuffer,
+        size: chunkBuffer.byteLength,
+      },
+      context,
+      targetChannelId,
+    );
+
+    if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
+      throw new Error(`Discord did not return storage metadata for ${partName}.`);
+    }
+
+    parts.push({
+      index,
+      fileName: partName,
+      size: chunkBuffer.byteLength,
+      sha256: hashBuffer(chunkBuffer),
+      attachmentUrl: uploadedPart.attachmentUrl,
+      storageChannelId: uploadedPart.storageChannelId,
+      storageMessageId: uploadedPart.storageMessageId,
+    });
+  }
+
+  const firstPart = parts[0];
+  if (!firstPart) {
+    throw new Error(`Cannot upload an empty chunked file: ${file.originalname}.`);
+  }
+
+  return {
+    fileName: file.originalname,
+    fileSize: file.size,
+    mimeType: file.mimetype || "application/octet-stream",
+    guildId: context.guildId,
+    attachmentUrl: firstPart.attachmentUrl,
+    storageChannelId: firstPart.storageChannelId,
+    storageMessageId: firstPart.storageMessageId,
+    storageManifest: {
+      mode: "chunked",
+      version: 1,
+      chunkSize,
+      totalChunks,
+      totalSize: file.size,
+      sha256: hashBuffer(file.buffer),
+      parts,
+    },
+  };
+}
+
+export async function uploadFilesToDiscordDrive(
+  files: Express.Multer.File[],
+  context: ActiveStorageContext,
+): Promise<UploadedFileRecord[]> {
+  const uploadLimitBytes = await getDiscordUploadLimitForGuild(context.guildId);
+  const uploaded: UploadedFileRecord[] = [];
+
+  for (const file of files.map(toUploadableFile)) {
+    const record =
+      file.size <= uploadLimitBytes
+        ? await uploadSingleFileToDiscordChannel(file, context, context.driveChannelId)
+        : await uploadChunkedFileToDiscordChannel(file, context, context.driveChannelId, uploadLimitBytes);
+
+    uploaded.push(record);
+  }
+
+  return uploaded;
 }
 
 export async function refreshIndexSnapshotAttachmentUrls(
@@ -201,25 +355,190 @@ export async function syncConfigSnapshot(
   await requestBotJson<{ synced: true }>("/snapshots/config/sync", toJsonBody({ context, snapshot }));
 }
 
+async function deleteStorageMessages(
+  context: ActiveStorageContext,
+  messages: Array<{ channelId: string; messageId: string }>,
+): Promise<void> {
+  if (messages.length === 0) {
+    return;
+  }
+
+  await requestBotJson<{ deleted: true }>("/files/delete-messages", toJsonBody({ context, messages }));
+}
+
+function getSingleStorageMessage(item: LibraryItem): { channelId: string; messageId: string } | null {
+  if (!item.storageChannelId || !item.storageMessageId) {
+    return null;
+  }
+
+  return {
+    channelId: item.storageChannelId,
+    messageId: item.storageMessageId,
+  };
+}
+
+function createRecordFromChunkedManifest(
+  item: Pick<LibraryItem, "name" | "size" | "mimeType">,
+  guildId: string,
+  storageManifest: LibraryItemStorageManifest,
+): UploadedFileRecord {
+  const firstPart = storageManifest.parts[0];
+  if (!firstPart) {
+    throw new Error(`Chunked storage manifest for "${item.name}" has no parts.`);
+  }
+
+  return {
+    fileName: item.name,
+    fileSize: item.size,
+    mimeType: item.mimeType,
+    guildId,
+    attachmentUrl: firstPart.attachmentUrl,
+    storageChannelId: firstPart.storageChannelId,
+    storageMessageId: firstPart.storageMessageId,
+    storageManifest,
+  };
+}
+
+async function moveSingleStoredItemToChannel(
+  context: ActiveStorageContext,
+  item: LibraryItem,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  if (item.storageChannelId === targetChannelId && item.storageMessageId) {
+    return {
+      fileName: item.name,
+      fileSize: item.size,
+      mimeType: item.mimeType,
+      guildId: context.guildId,
+      attachmentUrl: item.attachmentUrl,
+      storageChannelId: item.storageChannelId,
+      storageMessageId: item.storageMessageId,
+      storageManifest: null,
+    };
+  }
+
+  const buffer = await downloadAttachmentBuffer(item.attachmentUrl);
+  const moved = await uploadSingleFileToDiscordChannel(
+    {
+      originalname: item.name,
+      mimetype: item.mimeType || "application/octet-stream",
+      buffer,
+      size: item.size,
+    },
+    context,
+    targetChannelId,
+  );
+  const oldMessage = getSingleStorageMessage(item);
+  if (oldMessage) {
+    await deleteStorageMessages(context, [oldMessage]);
+  }
+
+  return {
+    ...moved,
+    fileSize: item.size,
+    storageManifest: null,
+  };
+}
+
+async function moveChunkedStoredItemToChannel(
+  context: ActiveStorageContext,
+  item: LibraryItem,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  if (!hasChunkedStorage(item)) {
+    throw new Error(`"${item.name}" is not stored as a chunked file.`);
+  }
+
+  if (item.storageManifest.parts.every((part) => part.storageChannelId === targetChannelId)) {
+    return createRecordFromChunkedManifest(item, context.guildId, item.storageManifest);
+  }
+
+  const nextParts: LibraryItemStoragePart[] = [];
+
+  for (const part of item.storageManifest.parts) {
+    const buffer = await downloadAttachmentBuffer(part.attachmentUrl);
+    if (buffer.byteLength !== part.size || hashBuffer(buffer) !== part.sha256) {
+      throw new Error(`Chunk ${part.index + 1} for "${item.name}" failed integrity validation.`);
+    }
+
+    const uploadedPart = await uploadSingleFileToDiscordChannel(
+      {
+        originalname: part.fileName,
+        mimetype: "application/octet-stream",
+        buffer,
+        size: part.size,
+      },
+      context,
+      targetChannelId,
+    );
+
+    if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
+      throw new Error(`Discord did not return storage metadata for ${part.fileName}.`);
+    }
+
+    nextParts.push({
+      ...part,
+      attachmentUrl: uploadedPart.attachmentUrl,
+      storageChannelId: uploadedPart.storageChannelId,
+      storageMessageId: uploadedPart.storageMessageId,
+    });
+  }
+
+  await deleteStorageMessages(
+    context,
+    item.storageManifest.parts.map((part) => ({
+      channelId: part.storageChannelId,
+      messageId: part.storageMessageId,
+    })),
+  );
+
+  return createRecordFromChunkedManifest(item, context.guildId, {
+    ...item.storageManifest,
+    parts: nextParts,
+  });
+}
+
+async function moveStoredItemToChannel(
+  context: ActiveStorageContext,
+  item: LibraryItem,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  return hasChunkedStorage(item)
+    ? moveChunkedStoredItemToChannel(context, item, targetChannelId)
+    : moveSingleStoredItemToChannel(context, item, targetChannelId);
+}
+
 export async function moveStoredItemToTrash(
   context: ActiveStorageContext,
   item: LibraryItem,
 ): Promise<UploadedFileRecord> {
-  const payload = await requestBotJson<{ record: UploadedFileRecord }>("/files/move-to-trash", toJsonBody({ context, item }));
-  return payload.record;
+  return moveStoredItemToChannel(context, item, context.trashChannelId);
 }
 
 export async function restoreStoredItemFromTrash(
   context: ActiveStorageContext,
   item: LibraryItem,
 ): Promise<UploadedFileRecord> {
-  const payload = await requestBotJson<{ record: UploadedFileRecord }>("/files/restore-from-trash", toJsonBody({ context, item }));
-  return payload.record;
+  return moveStoredItemToChannel(context, item, context.driveChannelId);
 }
 
 export async function deleteStoredItemFromDiscord(
   context: ActiveStorageContext,
   item: LibraryItem,
 ): Promise<void> {
-  await requestBotJson<{ deleted: true }>("/files/delete", toJsonBody({ context, item }));
+  if (hasChunkedStorage(item)) {
+    await deleteStorageMessages(
+      context,
+      item.storageManifest.parts.map((part) => ({
+        channelId: part.storageChannelId,
+        messageId: part.storageMessageId,
+      })),
+    );
+    return;
+  }
+
+  const message = getSingleStorageMessage(item);
+  if (message) {
+    await deleteStorageMessages(context, [message]);
+  }
 }

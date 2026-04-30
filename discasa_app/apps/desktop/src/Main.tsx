@@ -14,6 +14,7 @@ import {
   type PointerEventHandler,
   type ReactNode,
   type RefObject,
+  type SyntheticEvent,
   type WheelEvent,
 } from "react";
 import { createRoot } from "react-dom/client";
@@ -62,6 +63,7 @@ import {
   updateAppConfig,
   uploadFiles,
   chooseLocalMirrorFolder,
+  downloadLibraryItems,
   DEFAULT_PROFILE,
   getCurrentDescription,
   getCurrentTitle,
@@ -74,6 +76,7 @@ import {
   hsvToHex,
   normalizeHexColor,
   tintHexColor,
+  isAudio,
   isImage,
   isVideo,
   createViewerDraftStateFromItem,
@@ -352,6 +355,7 @@ export function App() {
   const [accentColor, setAccentColor] = useState<string>(() => readStoredString(ACCENT_COLOR_KEY, DEFAULT_ACCENT_HEX));
   const [localMirrorEnabled, setLocalMirrorEnabled] = useState(DISCASA_DEFAULT_CONFIG.localMirrorEnabled);
   const [localMirrorPath, setLocalMirrorPath] = useState<string>(DISCASA_DEFAULT_CONFIG.localMirrorPath ?? "");
+  const [mediaPreviewVolume, setMediaPreviewVolume] = useState(DISCASA_DEFAULT_CONFIG.mediaPreviewVolume);
   const [localStorageStatus, setLocalStorageStatus] = useState<LocalStorageStatus | null>(null);
   const [isChoosingMirrorFolder, setIsChoosingMirrorFolder] = useState(false);
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
@@ -774,6 +778,7 @@ export function App() {
     setAccentColor(normalizedAccent);
     setThumbnailZoomIndex(getClosestThumbnailZoomIndex(nextConfig.thumbnailZoomPercent));
     setGalleryDisplayMode(nextConfig.galleryDisplayMode);
+    setMediaPreviewVolume(clampNumber(nextConfig.mediaPreviewVolume, 0, 1));
     setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
     setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
   }
@@ -857,6 +862,12 @@ export function App() {
     };
 
     scheduleConfigSave();
+  }
+
+  function handleMediaPreviewVolumeChange(nextVolume: number): void {
+    const normalizedVolume = clampNumber(nextVolume, 0, 1);
+    setMediaPreviewVolume(normalizedVolume);
+    persistConfigPatch({ mediaPreviewVolume: normalizedVolume });
   }
 
   function syncGuildSelection(nextGuilds: GuildSummary[], preferredGuildId?: string): void {
@@ -1732,6 +1743,31 @@ export function App() {
     }
   }
 
+  async function handleDownloadSelectedItems(targets: LibraryItem[]): Promise<void> {
+    const downloadableItems = targets.filter((item) => item.attachmentStatus !== "missing");
+
+    if (isBusy) {
+      return;
+    }
+
+    if (downloadableItems.length === 0) {
+      setError("Selected files are unavailable for download.");
+      return;
+    }
+
+    setIsBusy(true);
+    setError("");
+
+    try {
+      await downloadLibraryItems(downloadableItems);
+      setMessage(`${downloadableItems.length} file(s) sent to downloads.`);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Could not download the selected files.");
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function handleSaveMediaEdit(itemId: string, input: SaveLibraryItemMediaEditInput): Promise<LibraryItem> {
     const response = await saveLibraryItemMediaEditRequest(itemId, input);
     updateItemInState(response.item);
@@ -2118,8 +2154,10 @@ export function App() {
             thumbnailZoomIndex={thumbnailZoomIndex}
             thumbnailZoomLevelCount={THUMBNAIL_ZOOM_LEVELS.length}
             thumbnailZoomPercent={thumbnailZoomPercent}
+            mediaPreviewVolume={mediaPreviewVolume}
             onThumbnailZoomIndexChange={handleThumbnailZoomIndexChange}
             onToggleGalleryDisplayMode={handleToggleGalleryDisplayMode}
+            onMediaPreviewVolumeChange={handleMediaPreviewVolumeChange}
             onSelectItem={handleSelectItem}
             onClearSelection={handleClearSelectedItems}
             onApplySelectionRect={handleApplySelectionRect}
@@ -2153,6 +2191,7 @@ export function App() {
             onRemoveItemsFromAlbum={handleRemoveItemsFromAlbum}
             onMoveToTrash={handleMoveToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
+            onDownloadSelected={handleDownloadSelectedItems}
             onSaveMediaEdit={handleSaveMediaEdit}
             onRestoreMediaEdit={handleRestoreMediaEditOriginal}
             onDeleteItem={handleDeleteItem}
@@ -2407,6 +2446,14 @@ export function VideoIcon() {
   );
 }
 
+export function AudioIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M14.75 5.5v9.65a2.85 2.85 0 1 1-1.8-2.65V7.15l5.3-1.4v7.4a2.85 2.85 0 1 1-1.8-2.65V5.95" fill="none" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function FolderIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2459,6 +2506,16 @@ export function UploadIcon() {
       <path d="M12 15.75V6.25" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
       <path d="m8.5 9.75 3.5-3.5 3.5 3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M5.75 16.25v1a1.5 1.5 0 0 0 1.5 1.5h9.5a1.5 1.5 0 0 0 1.5-1.5v-1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function DownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5.75v9.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="m8.5 11.75 3.5 3.5 3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.75 18.25h12.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
     </svg>
   );
 }
@@ -3278,6 +3335,7 @@ type BulkActionBarProps = {
   canMove: boolean;
   canRemoveFromAlbum: boolean;
   onToggleFavorite: () => void;
+  onDownload: () => void;
   onMove: () => void;
   onRemoveFromAlbum: () => void;
   onMoveToTrash: () => void;
@@ -3293,6 +3351,7 @@ export function BulkActionBar({
   canMove,
   canRemoveFromAlbum,
   onToggleFavorite,
+  onDownload,
   onMove,
   onRemoveFromAlbum,
   onMoveToTrash,
@@ -3306,6 +3365,19 @@ export function BulkActionBar({
   return (
     <div className="bulk-action-bar" aria-label={`${selectedCount} item(s) selected`}>
       <span className="bulk-selection-count">{selectedCount} selected</span>
+
+      <button
+        type="button"
+        className="bulk-action-button"
+        onClick={onDownload}
+        disabled={isBusy}
+        title="Download selected files"
+      >
+        <span className="bulk-action-icon" aria-hidden="true">
+          <DownloadIcon />
+        </span>
+        <span className="bulk-action-label">Download</span>
+      </button>
 
       {isTrashSelection ? (
         <>
@@ -3564,8 +3636,10 @@ type GalleryProps = {
   thumbnailZoomIndex: number;
   thumbnailZoomLevelCount: number;
   thumbnailZoomPercent: number;
+  mediaPreviewVolume: number;
   onThumbnailZoomIndexChange: (nextIndex: number) => void;
   onToggleGalleryDisplayMode: () => void;
+  onMediaPreviewVolumeChange: (nextVolume: number) => void;
   onSelectItem: (itemId: string, options: { range: boolean; toggle: boolean }) => void;
   onClearSelection: () => void;
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
@@ -3585,6 +3659,7 @@ type GalleryProps = {
   onRemoveItemsFromAlbum: (albumId: string, itemIds: string[]) => Promise<void>;
   onMoveToTrash: (itemId: string) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
+  onDownloadSelected: (items: LibraryItem[]) => Promise<void>;
   onSaveMediaEdit: (itemId: string, input: SaveLibraryItemMediaEditInput) => Promise<LibraryItem>;
   onRestoreMediaEdit: (itemId: string) => Promise<LibraryItem>;
   onDeleteItem: (itemId: string) => Promise<void>;
@@ -4501,8 +4576,10 @@ export function Gallery({
   thumbnailZoomIndex,
   thumbnailZoomLevelCount,
   thumbnailZoomPercent,
+  mediaPreviewVolume,
   onThumbnailZoomIndexChange,
   onToggleGalleryDisplayMode,
+  onMediaPreviewVolumeChange,
   onSelectItem,
   onClearSelection,
   onApplySelectionRect,
@@ -4522,6 +4599,7 @@ export function Gallery({
   onRemoveItemsFromAlbum,
   onMoveToTrash,
   onRestoreFromTrash,
+  onDownloadSelected,
   onSaveMediaEdit,
   onRestoreMediaEdit,
   onDeleteItem,
@@ -4682,6 +4760,14 @@ export function Gallery({
     for (const item of targets) {
       await onRestoreFromTrash(item.id);
     }
+  }
+
+  async function handleBulkDownload(): Promise<void> {
+    if (isBusy || selectedItems.length === 0) {
+      return;
+    }
+
+    await onDownloadSelected(selectedItems);
   }
 
   async function handleBulkRemoveFromAlbum(): Promise<void> {
@@ -4851,6 +4937,9 @@ export function Gallery({
         onToggleFavorite={() => {
           void handleBulkFavoriteToggle();
         }}
+        onDownload={() => {
+          void handleBulkDownload();
+        }}
         onMove={onOpenMoveItemsModal}
         onRemoveFromAlbum={() => {
           void handleBulkRemoveFromAlbum();
@@ -4936,6 +5025,7 @@ export function Gallery({
         currentIndex={activeViewerIndex}
         totalItems={displayItems.length}
         wheelBehavior={viewerWheelBehavior}
+        mediaVolume={mediaPreviewVolume}
         draftState={viewerDraftState}
         hasPendingSave={viewerHasPendingSave}
         isSaving={isSavingViewerEdit}
@@ -4955,6 +5045,7 @@ export function Gallery({
         onNext={() => {
           handleNavigateViewer("next");
         }}
+        onMediaVolumeChange={onMediaPreviewVolumeChange}
       />
     </main>
   );
@@ -4965,6 +5056,7 @@ type MediaViewerModalProps = {
   currentIndex: number;
   totalItems: number;
   wheelBehavior: MouseWheelBehavior;
+  mediaVolume: number;
   draftState: ViewerDraftState;
   hasPendingSave: boolean;
   isSaving: boolean;
@@ -4976,6 +5068,7 @@ type MediaViewerModalProps = {
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  onMediaVolumeChange: (nextVolume: number) => void;
 };
 
 function clampZoom(value: number): number {
@@ -5018,6 +5111,7 @@ export function MediaViewerModal({
   currentIndex,
   totalItems,
   wheelBehavior,
+  mediaVolume,
   draftState,
   hasPendingSave,
   isSaving,
@@ -5029,11 +5123,15 @@ export function MediaViewerModal({
   onClose,
   onPrevious,
   onNext,
+  onMediaVolumeChange,
 }: MediaViewerModalProps) {
   const lastWheelNavigationAtRef = useRef(0);
+  const mediaElementRef = useRef<HTMLMediaElement | null>(null);
   const isOpen = Boolean(item);
   const imageMode = item ? isImage(item) : false;
   const videoMode = item ? isVideo(item) : false;
+  const audioMode = item ? isAudio(item) : false;
+  const playableMediaMode = videoMode || audioMode;
   const hasSavedEdit = Boolean(item?.savedMediaEdit);
   const hasOriginalSource = Boolean(item?.originalSource);
   const savedAtLabel = formatSavedAt(item?.savedMediaEdit?.savedAt);
@@ -5077,6 +5175,41 @@ export function MediaViewerModal({
       }),
     );
   }
+
+  function updateMediaVolume(nextVolume: number): void {
+    const normalizedVolume = clampNumber(nextVolume, 0, 1);
+    if (Math.abs(normalizedVolume - mediaVolume) < 0.001) {
+      return;
+    }
+
+    onMediaVolumeChange(normalizedVolume);
+  }
+
+  function handleMediaVolumeChange(event: ChangeEvent<HTMLInputElement>): void {
+    updateMediaVolume(Number.parseFloat(event.target.value));
+  }
+
+  function handleNativeMediaVolumeChange(event: SyntheticEvent<HTMLMediaElement>): void {
+    updateMediaVolume(event.currentTarget.volume);
+  }
+
+  function assignMediaElement(element: HTMLMediaElement | null): void {
+    mediaElementRef.current = element;
+
+    if (element) {
+      element.volume = mediaVolume;
+    }
+  }
+
+  useEffect(() => {
+    const mediaElement = mediaElementRef.current;
+
+    if (!mediaElement || !playableMediaMode) {
+      return;
+    }
+
+    mediaElement.volume = mediaVolume;
+  }, [item?.id, mediaVolume, playableMediaMode]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -5252,7 +5385,7 @@ export function MediaViewerModal({
           </button>
 
           <div
-            className={`media-viewer-viewport ${imageMode ? "image-mode" : ""} ${videoMode ? "video-mode" : ""} ${draftState.hasCrop ? "crop-active" : ""}`}
+            className={`media-viewer-viewport ${imageMode ? "image-mode" : ""} ${videoMode ? "video-mode" : ""} ${audioMode ? "audio-mode" : ""} ${draftState.hasCrop ? "crop-active" : ""}`}
             onWheel={handleWheel}
           >
             {imageMode ? (
@@ -5270,15 +5403,37 @@ export function MediaViewerModal({
 
             {videoMode ? (
               <video
+                ref={assignMediaElement}
                 src={mediaUrl}
                 className="media-viewer-video"
                 controls
                 playsInline
                 preload="metadata"
+                onVolumeChange={handleNativeMediaVolumeChange}
               />
             ) : null}
 
-            {!imageMode && !videoMode ? (
+            {audioMode ? (
+              <div className="media-viewer-audio-panel">
+                <span className="media-viewer-audio-art" aria-hidden="true">
+                  <AudioIcon />
+                </span>
+                <div className="media-viewer-audio-details">
+                  <span className="media-viewer-audio-title">{item.name}</span>
+                  <span className="media-viewer-audio-meta">{item.mimeType}</span>
+                </div>
+                <audio
+                  ref={assignMediaElement}
+                  src={mediaUrl}
+                  className="media-viewer-audio"
+                  controls
+                  preload="metadata"
+                  onVolumeChange={handleNativeMediaVolumeChange}
+                />
+              </div>
+            ) : null}
+
+            {!imageMode && !videoMode && !audioMode ? (
               <div className="media-viewer-file-fallback">
                 <span className="media-viewer-file-extension">
                   {(item.name.split(".").pop() || "FILE").slice(0, 5).toUpperCase()}
@@ -5389,8 +5544,26 @@ export function MediaViewerModal({
               </button>
             </div>
           ) : (
-            <div className="media-viewer-info-chip">
-              {videoMode ? "Video preview" : "File preview"}
+            <div className="media-viewer-non-image-controls">
+              <div className="media-viewer-info-chip">
+                {videoMode ? "Video preview" : audioMode ? "Audio player" : "File preview"}
+              </div>
+
+              {playableMediaMode ? (
+                <label className="media-viewer-volume-control" title={`Volume: ${Math.round(mediaVolume * 100)}%`}>
+                  <span className="media-viewer-volume-label">Volume</span>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={mediaVolume}
+                    onChange={handleMediaVolumeChange}
+                    aria-label="Preview volume"
+                  />
+                  <span className="media-viewer-volume-value">{Math.round(mediaVolume * 100)}%</span>
+                </label>
+              ) : null}
             </div>
           )}
 
@@ -5406,7 +5579,7 @@ export function MediaViewerModal({
               {hasSavedEdit ? <span>O Original</span> : null}
             </div>
             <div className="media-viewer-zoom-readout" aria-live="polite">
-              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : "Preview"}
+              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : audioMode ? "Player" : "Preview"}
             </div>
           </div>
         </footer>

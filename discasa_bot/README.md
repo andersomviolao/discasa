@@ -1,10 +1,10 @@
 # Discasa Bot
 
-Local Discord bot service used by Discasa for Discord-backed storage operations.
+Local Discord bot service used by Discasa for Discord validation and narrow Discord channel/message operations.
 
 The bot runs as its own Node.js process and exposes a local HTTP API for the Discasa app backend. By default it listens on `http://localhost:3002`.
 
-Bot-specific icon and banner artwork live in `art/`.
+The Discasa app backend owns file storage orchestration, including chunking, manifests, trash/restore decisions, and local reassembly. The bot validates Discord limits and channels, then performs the small Discord API operations the app asks for. Bot-specific icon and banner artwork live in `art/`.
 
 ## Setup
 

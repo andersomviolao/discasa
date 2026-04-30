@@ -56,6 +56,7 @@ export type LibraryItemOriginalSource = {
   attachmentUrl: string;
   storageChannelId?: string;
   storageMessageId?: string;
+  storageManifest?: LibraryItemStorageManifest | null;
 };
 
 export type LibraryItemSavedMediaEdit = {
@@ -70,6 +71,26 @@ export type SaveLibraryItemMediaEditInput = {
 };
 
 export type LibraryItemAttachmentStatus = "ready" | "missing";
+
+export type LibraryItemStoragePart = {
+  index: number;
+  fileName: string;
+  size: number;
+  sha256: string;
+  attachmentUrl: string;
+  storageChannelId: string;
+  storageMessageId: string;
+};
+
+export type LibraryItemStorageManifest = {
+  mode: "chunked";
+  version: 1;
+  chunkSize: number;
+  totalChunks: number;
+  totalSize: number;
+  sha256: string;
+  parts: LibraryItemStoragePart[];
+};
 
 export type LibraryItem = {
   id: string;
@@ -86,6 +107,7 @@ export type LibraryItem = {
   isTrashed: boolean;
   storageChannelId?: string;
   storageMessageId?: string;
+  storageManifest?: LibraryItemStorageManifest | null;
   originalSource?: LibraryItemOriginalSource | null;
   savedMediaEdit?: LibraryItemSavedMediaEdit | null;
   contentUrl?: string;
@@ -118,6 +140,7 @@ export type DiscasaConfig = {
   thumbnailZoomPercent: number;
   galleryDisplayMode: "free" | "square";
   viewerMouseWheelBehavior: "zoom" | "navigate";
+  mediaPreviewVolume: number;
   sidebarCollapsed: boolean;
   localMirrorEnabled: boolean;
   localMirrorPath: string | null;
@@ -130,6 +153,7 @@ export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
   thumbnailZoomPercent: 35,
   galleryDisplayMode: "free",
   viewerMouseWheelBehavior: "zoom",
+  mediaPreviewVolume: 0.8,
   sidebarCollapsed: false,
   localMirrorEnabled: false,
   localMirrorPath: null,

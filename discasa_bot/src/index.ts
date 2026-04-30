@@ -7,6 +7,7 @@ import type {
   PersistedIndexSnapshot,
 } from "@discasa/shared";
 import {
+  deleteStorageMessagesFromDiscord,
   deleteStoredItemFromDiscord,
   getDiscordBotRuntimeStatus,
   getDiscordUploadLimitForGuild,
@@ -24,7 +25,7 @@ import {
   syncConfigSnapshot,
   syncFolderSnapshot,
   syncIndexSnapshot,
-  uploadFilesToDiscordDrive,
+  uploadFilesToDiscordChannel,
 } from "./discord";
 import { env } from "./config";
 import type { ActiveStorageContext } from "./storage-types";
@@ -102,13 +103,35 @@ app.post("/files/upload", upload.array("files"), async (request, response, next)
   try {
     const files = request.files as Express.Multer.File[] | undefined;
     const context = readMultipartContext(request.body.context);
+    const targetChannelId =
+      typeof request.body.targetChannelId === "string" && request.body.targetChannelId.length > 0
+        ? request.body.targetChannelId
+        : context.driveChannelId;
 
     if (!files?.length) {
       response.status(400).json({ error: "At least one file is required." });
       return;
     }
 
-    response.json({ records: await uploadFilesToDiscordDrive(files, context) });
+    response.json({ records: await uploadFilesToDiscordChannel(files, context, targetChannelId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/files/delete-messages", async (request, response, next) => {
+  try {
+    const rawMessages = Array.isArray(request.body.messages) ? request.body.messages : [];
+    const messages = rawMessages.map((entry: unknown) => {
+      const message = entry && typeof entry === "object" ? entry as Record<string, unknown> : {};
+      return {
+        channelId: String(message.channelId ?? ""),
+        messageId: String(message.messageId ?? ""),
+      };
+    }).filter((message: { channelId: string; messageId: string }) => message.channelId.length > 0 && message.messageId.length > 0);
+
+    await deleteStorageMessagesFromDiscord(readContext(request.body.context), messages);
+    response.json({ deleted: true });
   } catch (error) {
     next(error);
   }

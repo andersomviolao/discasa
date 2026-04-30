@@ -24,7 +24,6 @@ echo - discasa_app\apps\desktop\src-tauri\gen
 echo - discasa_app\apps\desktop\src-tauri\target
 echo - discasa_app\apps\server\dist
 echo - discasa_bot\dist
-echo - target
 echo.
 echo This will also remove Discasa local app data:
 echo - %%APPDATA%%\%APP_NAME%                 ^(auth, local metadata, saved runtime state^)
@@ -45,8 +44,6 @@ if errorlevel 2 (
   exit /b 0
 )
 
-call :remove_dir "%ROOT_DIR%\node_modules"
-call :remove_file "%ROOT_DIR%\package-lock.json"
 call :remove_dir "%APP_DIR%\node_modules"
 call :remove_file "%APP_DIR%\package-lock.json"
 call :remove_dir "%APP_DIR%\apps\desktop\node_modules"
@@ -55,11 +52,9 @@ call :remove_dir "%APP_DIR%\apps\desktop\src-tauri\gen"
 call :remove_dir "%APP_DIR%\apps\desktop\src-tauri\target"
 call :remove_dir "%APP_DIR%\apps\server\node_modules"
 call :remove_dir "%APP_DIR%\apps\server\dist"
-call :remove_dir "%APP_DIR%\target"
 call :remove_dir "%BOT_DIR%\node_modules"
 call :remove_file "%BOT_DIR%\package-lock.json"
 call :remove_dir "%BOT_DIR%\dist"
-call :remove_dir "%BOT_DIR%\target"
 
 call :remove_dir "%APPDATA%\%APP_NAME%"
 call :remove_dir "%LOCALAPPDATA%\%APP_NAME%"
@@ -115,29 +110,15 @@ echo npm install finished successfully for %INSTALL_NAME%.
 exit /b 0
 
 :start_discasa
-if not exist "%BOT_DIR%\start.bat" (
-  echo Bot start script not found: %BOT_DIR%\start.bat
-  pause
-  exit /b 1
-)
-
-if not exist "%APP_DIR%\start.bat" (
-  echo App start script not found: %APP_DIR%\start.bat
+if not exist "%ROOT_DIR%\start.bat" (
+  echo Root start script not found: %ROOT_DIR%\start.bat
   pause
   exit /b 1
 )
 
 echo.
-echo Starting Discasa bot...
-start "Discasa Bot" cmd /k "cd /d ""%BOT_DIR%"" && npm run dev"
-timeout /t 2 >nul
-
-echo Starting Discasa app server...
-start "Discasa Server" cmd /k "cd /d ""%APP_DIR%"" && npm run dev:server"
-timeout /t 2 >nul
-
-echo Starting Discasa desktop...
-start "Discasa Desktop" cmd /k "cd /d ""%APP_DIR%"" && npm --workspace @discasa/desktop exec tauri dev"
+echo Starting Discasa from root launcher...
+call "%ROOT_DIR%\start.bat"
 exit /b 0
 
 :remove_dir

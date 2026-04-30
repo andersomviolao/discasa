@@ -1,3 +1,5 @@
+import type { LibraryItemStorageManifest } from "@discasa/shared";
+
 export type ActiveStorageContext = {
   guildId: string;
   guildName: string;
@@ -23,4 +25,5 @@ export type UploadedFileRecord = {
   attachmentUrl: string;
   storageChannelId?: string;
   storageMessageId?: string;
+  storageManifest?: LibraryItemStorageManifest | null;
 };

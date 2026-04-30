@@ -8,6 +8,8 @@ import {
   type GuildSummary,
   type LibraryItem,
   type LibraryItemIndex,
+  type LibraryItemStorageManifest,
+  type LibraryItemStoragePart,
   type PersistedConfigSnapshot,
   type PersistedFolderSnapshot,
   type PersistedIndexSnapshot,
@@ -86,7 +88,11 @@ type StoredAttachmentPointer = {
   attachmentUrl: string;
 };
 
-type AttachmentResolution = StoredAttachmentPointer & {
+type AttachmentResolution = {
+  attachmentUrl: string;
+  storageChannelId?: string;
+  storageMessageId?: string;
+  storageManifest?: LibraryItemStorageManifest | null;
   method: "message-reference" | "history-scan";
 };
 
@@ -134,6 +140,12 @@ function getUploadLimitFromPremiumTier(premiumTier: number): number {
   }
 
   return DEFAULT_UPLOAD_LIMIT_BYTES;
+}
+
+function hasChunkedStorage(
+  item: Pick<LibraryItemIndex, "storageManifest">,
+): item is Pick<LibraryItemIndex, "storageManifest"> & { storageManifest: LibraryItemStorageManifest } {
+  return item.storageManifest?.mode === "chunked";
 }
 
 export async function getDiscordUploadLimitForGuild(guildId: string): Promise<number> {
@@ -633,11 +645,97 @@ async function resolveStoredMessage(
   };
 }
 
+async function findAttachmentForStoragePart(
+  context: ActiveStorageContext,
+  item: Pick<LibraryItemIndex, "name" | "isTrashed">,
+  part: LibraryItemStoragePart,
+): Promise<StoredAttachmentPointer | null> {
+  const client = await getBotClient();
+  const botUserId = client?.user?.id ?? null;
+  const candidateChannelIds = [
+    part.storageChannelId,
+    item.isTrashed ? context.trashChannelId : context.driveChannelId,
+    context.driveChannelId,
+    context.trashChannelId,
+  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+  for (const channelId of candidateChannelIds) {
+    try {
+      const locatedAttachment = await findAttachmentInChannelHistory(channelId, {
+        preferredFileName: part.fileName,
+        currentAttachmentUrl: part.attachmentUrl,
+        botUserId,
+      });
+
+      if (locatedAttachment) {
+        return locatedAttachment;
+      }
+    } catch (error) {
+      if (error instanceof DiscordStorageUnavailableError) {
+        console.warn(`[Discasa recovery] Skipping unavailable storage channel ${channelId} while relinking "${item.name}" chunk ${part.index + 1}.`);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return null;
+}
+
+async function resolveStoredPart(
+  context: ActiveStorageContext,
+  item: Pick<LibraryItemIndex, "name" | "isTrashed">,
+  part: LibraryItemStoragePart,
+): Promise<StoredAttachmentPointer> {
+  const directAttachment = await fetchMessageAttachmentByReference(part.storageChannelId, part.storageMessageId, part.fileName);
+  if (directAttachment) {
+    return directAttachment;
+  }
+
+  const fallbackAttachment = await findAttachmentForStoragePart(context, item, part);
+  if (!fallbackAttachment) {
+    throw new Error(`Could not locate chunk ${part.index + 1} for "${item.name}".`);
+  }
+
+  return fallbackAttachment;
+}
+
+async function resolveChunkedManifest(
+  context: ActiveStorageContext,
+  item: LibraryItemIndex,
+): Promise<LibraryItemStorageManifest> {
+  if (!hasChunkedStorage(item)) {
+    throw new Error(`"${item.name}" is not stored as a chunked file.`);
+  }
+
+  const parts: LibraryItemStoragePart[] = [];
+
+  for (const part of item.storageManifest.parts) {
+    const resolved = await resolveStoredPart(context, item, part);
+    parts.push({
+      ...part,
+      attachmentUrl: resolved.attachmentUrl,
+      storageChannelId: resolved.channelId,
+      storageMessageId: resolved.messageId,
+    });
+  }
+
+  return {
+    ...item.storageManifest,
+    parts,
+  };
+}
+
 async function transferItemBetweenChannels(
   context: ActiveStorageContext,
   item: LibraryItem,
   targetChannelId: string,
 ): Promise<UploadedFileRecord> {
+  if (hasChunkedStorage(item)) {
+    throw new Error("Chunked file movement is coordinated by the Discasa app service.");
+  }
+
   const source = await resolveStoredMessage(context, item);
 
   if (source.channelId === targetChannelId) {
@@ -649,6 +747,7 @@ async function transferItemBetweenChannels(
       attachmentUrl: source.attachmentUrl,
       storageChannelId: source.channelId,
       storageMessageId: source.messageId,
+      storageManifest: null,
     };
   }
 
@@ -1020,11 +1119,38 @@ async function resolveCurrentAttachment(
   context: ActiveStorageContext,
   item: LibraryItemIndex,
 ): Promise<AttachmentResolution | { reason: string }> {
+  if (hasChunkedStorage(item)) {
+    try {
+      const storageManifest = await resolveChunkedManifest(context, item);
+      const firstPart = storageManifest.parts[0];
+      if (!firstPart) {
+        return {
+          reason: "Stored chunk manifest has no parts.",
+        };
+      }
+
+      return {
+        attachmentUrl: firstPart.attachmentUrl,
+        storageChannelId: firstPart.storageChannelId,
+        storageMessageId: firstPart.storageMessageId,
+        storageManifest,
+        method: "message-reference",
+      };
+    } catch (error) {
+      return {
+        reason: error instanceof Error ? error.message : "Stored chunk manifest could not be resolved.",
+      };
+    }
+  }
+
   if (item.storageChannelId && item.storageMessageId) {
     const directAttachment = await fetchMessageAttachmentByReference(item.storageChannelId, item.storageMessageId, item.name);
     if (directAttachment) {
       return {
-        ...directAttachment,
+        attachmentUrl: directAttachment.attachmentUrl,
+        storageChannelId: directAttachment.channelId,
+        storageMessageId: directAttachment.messageId,
+        storageManifest: null,
         method: "message-reference",
       };
     }
@@ -1033,9 +1159,10 @@ async function resolveCurrentAttachment(
   const fallbackMessage = await findMessageForItem(context, item);
   if (fallbackMessage) {
     return {
-      channelId: fallbackMessage.channelId,
-      messageId: fallbackMessage.message.id,
       attachmentUrl: fallbackMessage.attachmentUrl,
+      storageChannelId: fallbackMessage.channelId,
+      storageMessageId: fallbackMessage.message.id,
+      storageManifest: null,
       method: "history-scan",
     };
   }
@@ -1051,11 +1178,35 @@ async function resolveCurrentAttachment(
   };
 }
 
-function didAttachmentPointerChange(item: LibraryItemIndex, resolved: StoredAttachmentPointer): boolean {
+function didStoragePartChange(left: LibraryItemStoragePart, right: LibraryItemStoragePart): boolean {
+  return (
+    left.attachmentUrl !== right.attachmentUrl ||
+    left.storageChannelId !== right.storageChannelId ||
+    left.storageMessageId !== right.storageMessageId
+  );
+}
+
+function didStorageManifestChange(
+  current: LibraryItemStorageManifest | null | undefined,
+  resolved: LibraryItemStorageManifest | null | undefined,
+): boolean {
+  if (!current && !resolved) {
+    return false;
+  }
+
+  if (!current || !resolved || current.parts.length !== resolved.parts.length) {
+    return true;
+  }
+
+  return resolved.parts.some((part, index) => didStoragePartChange(current.parts[index], part));
+}
+
+function didAttachmentPointerChange(item: LibraryItemIndex, resolved: AttachmentResolution): boolean {
   return (
     item.attachmentUrl !== resolved.attachmentUrl ||
-    item.storageChannelId !== resolved.channelId ||
-    item.storageMessageId !== resolved.messageId ||
+    item.storageChannelId !== resolved.storageChannelId ||
+    item.storageMessageId !== resolved.storageMessageId ||
+    didStorageManifestChange(item.storageManifest, resolved.storageManifest) ||
     item.attachmentStatus === "missing"
   );
 }
@@ -1111,8 +1262,9 @@ export async function refreshIndexSnapshotAttachmentUrls(
       guildId: context.guildId,
       attachmentUrl: resolution.attachmentUrl,
       attachmentStatus: "ready",
-      storageChannelId: resolution.channelId,
-      storageMessageId: resolution.messageId,
+      storageChannelId: resolution.storageChannelId,
+      storageMessageId: resolution.storageMessageId,
+      storageManifest: resolution.storageManifest ?? null,
     };
 
     if (didAttachmentPointerChange(item, resolution)) {
@@ -1337,6 +1489,20 @@ export async function uploadFilesToDiscordDrive(
   files: Express.Multer.File[],
   context: ActiveStorageContext,
 ): Promise<UploadedFileRecord[]> {
+  return uploadFilesToDiscordChannel(files, context, context.driveChannelId);
+}
+
+function assertWritableFileStorageChannel(context: ActiveStorageContext, channelId: string): void {
+  if (channelId !== context.driveChannelId && channelId !== context.trashChannelId) {
+    throw new Error("Target storage channel is not writable for file content.");
+  }
+}
+
+export async function uploadFilesToDiscordChannel(
+  files: Express.Multer.File[],
+  context: ActiveStorageContext,
+  targetChannelId: string,
+): Promise<UploadedFileRecord[]> {
   if (env.mockMode) {
     return files.map((file) => ({
       fileName: file.originalname,
@@ -1344,14 +1510,23 @@ export async function uploadFilesToDiscordDrive(
       mimeType: file.mimetype || "application/octet-stream",
       guildId: context.guildId,
       attachmentUrl: `mock://uploads/${encodeURIComponent(file.originalname)}`,
+      storageChannelId: targetChannelId,
+      storageMessageId: `mock-message-${encodeURIComponent(file.originalname)}`,
     }));
+  }
+
+  assertWritableFileStorageChannel(context, targetChannelId);
+  const uploadLimitBytes = await getDiscordUploadLimitForGuild(context.guildId);
+  const oversizedFiles = files.filter((file) => file.size > uploadLimitBytes);
+  if (oversizedFiles.length > 0) {
+    throw new Error(getUploadTooLargeMessage(oversizedFiles, uploadLimitBytes));
   }
 
   const uploaded: UploadedFileRecord[] = [];
 
   for (const file of files) {
     const nextRecord = await sendBufferToChannel(
-      context.driveChannelId,
+      targetChannelId,
       file.originalname,
       Buffer.from(file.buffer),
       file.mimetype || "application/octet-stream",
@@ -1365,6 +1540,19 @@ export async function uploadFilesToDiscordDrive(
   }
 
   return uploaded;
+}
+
+export async function deleteStorageMessagesFromDiscord(
+  context: ActiveStorageContext,
+  messages: Array<{ channelId: string; messageId: string }>,
+): Promise<void> {
+  for (const message of messages) {
+    assertWritableFileStorageChannel(context, message.channelId);
+  }
+
+  for (const message of messages) {
+    await deleteDiscordMessage(message.channelId, message.messageId);
+  }
 }
 
 export async function hasCurrentIndexSnapshot(context: ActiveStorageContext): Promise<boolean> {
@@ -1563,6 +1751,17 @@ export async function deleteStoredItemFromDiscord(
   context: ActiveStorageContext,
   item: LibraryItem,
 ): Promise<void> {
+  if (hasChunkedStorage(item)) {
+    await deleteStorageMessagesFromDiscord(
+      context,
+      item.storageManifest.parts.map((part) => ({
+        channelId: part.storageChannelId,
+        messageId: part.storageMessageId,
+      })),
+    );
+    return;
+  }
+
   const source = await resolveStoredMessage(context, item);
   await deleteDiscordMessage(source.channelId, source.messageId);
 }

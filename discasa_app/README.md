@@ -13,10 +13,11 @@ Discasa currently includes:
 - a shared package for cross-layer types and snapshot contracts
 - mock mode support for UI and flow development
 - Discord-backed persistence for files, folders, trash, and app configuration
+- transparent large-file chunking, storage manifests, and local reassembly
 - local cache and optional local file mirroring
 - startup library metadata cache for faster first paint
 
-The Discord bot service now lives separately in the sibling `discasa_bot` folder. The app talks to it through `DISCORD_BOT_URL`, which defaults to `http://localhost:3002`.
+The Discord bot service now lives separately in the sibling `discasa_bot` folder. The app talks to it through `DISCORD_BOT_URL`, which defaults to `http://localhost:3002`. File storage orchestration lives in the app backend; the bot service validates Discord access and performs narrow Discord channel/message operations.
 
 ## Architecture
 
@@ -96,7 +97,7 @@ The server still recognizes the old prototype folder at `apps\server\.discasa-da
 - selected server inspection
 - bot invite/apply flow
 - Discasa initialization inside the selected guild
-- upload size validation against Discord limits
+- app-side large-file chunking with bot-side Discord limit validation
 - synchronization of index, folder, trash, and app config snapshots back to Discord
 - backend bot status endpoint for detecting whether the local bot service is available
 

@@ -2781,6 +2781,62 @@ img {
   object-fit: contain;
 }
 
+.media-viewer-audio-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(100%, 520px);
+  transform: translate(-50%, -50%);
+  display: grid;
+  justify-items: center;
+  gap: var(--size-18);
+  padding: var(--size-28);
+  text-align: center;
+}
+
+.media-viewer-audio-art {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-92);
+  height: var(--size-92);
+  border-radius: var(--size-22);
+  border: var(--size-1) solid var(--white-alpha-12);
+  background: var(--white-alpha-07);
+  color: var(--text-primary);
+}
+
+.media-viewer-audio-art svg {
+  width: var(--size-42);
+  height: var(--size-42);
+}
+
+.media-viewer-audio-details {
+  display: grid;
+  gap: var(--size-6);
+  width: 100%;
+  min-width: 0;
+}
+
+.media-viewer-audio-title {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-title);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-viewer-audio-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-body);
+}
+
+.media-viewer-audio {
+  width: min(100%, 460px);
+  accent-color: var(--accent-color);
+}
+
 .media-viewer-file-fallback {
   position: absolute;
   inset: 0;
@@ -2870,6 +2926,13 @@ img {
   font-size: var(--font-size-body);
 }
 
+.media-viewer-non-image-controls {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--size-10);
+}
+
 .media-viewer-info-chip {
   display: inline-flex;
   align-items: center;
@@ -2879,6 +2942,34 @@ img {
   background: var(--white-alpha-06);
   color: var(--text-muted);
   font-size: var(--font-size-body);
+}
+
+.media-viewer-volume-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--size-8);
+  min-height: var(--size-32);
+  padding: 0 var(--size-12);
+  border-radius: var(--radius-pill);
+  background: var(--white-alpha-06);
+  color: var(--text-muted);
+}
+
+.media-viewer-volume-label,
+.media-viewer-volume-value {
+  font-size: var(--font-size-body);
+  white-space: nowrap;
+}
+
+.media-viewer-volume-value {
+  min-width: var(--size-38);
+  color: var(--text-primary);
+  text-align: right;
+}
+
+.media-viewer-volume-control input {
+  width: 120px;
+  accent-color: var(--accent-color);
 }
 
 .media-viewer-footer-meta {

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
 import type {
   DiscasaAttachmentRecoveryWarning,
   LibraryItem,
@@ -37,6 +39,13 @@ type RefreshIndexSnapshotResult = {
   didChange: boolean;
 };
 
+type DiscordDriveScanResult = {
+  records: UploadedFileRecord[];
+  scannedAttachmentCount: number;
+  skippedAttachmentCount: number;
+  skippedGroupedMessageCount: number;
+};
+
 type SnapshotKind = "index" | "folder" | "config";
 
 type BotErrorPayload = {
@@ -48,6 +57,14 @@ type UploadableFile = {
   mimetype: string;
   buffer: Buffer;
   size: number;
+};
+
+export type LocalUploadableFile = {
+  filePath: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  modifiedAt: string;
 };
 
 const CHUNK_UPLOAD_SAFETY_BYTES = 512 * 1024;
@@ -101,6 +118,29 @@ function getChunkSize(uploadLimitBytes: number): number {
 
 function hashBuffer(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
+}
+
+function hashLocalFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+async function readLocalFileChunk(filePath: string, start: number, size: number): Promise<Buffer> {
+  const handle = await fs.open(filePath, "r");
+
+  try {
+    const buffer = Buffer.alloc(size);
+    const result = await handle.read(buffer, 0, size, start);
+    return result.bytesRead === size ? buffer : buffer.subarray(0, result.bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 function formatChunkFileName(fileName: string, index: number, totalChunks: number): string {
@@ -293,6 +333,127 @@ export async function uploadFilesToDiscordDrive(
   }
 
   return uploaded;
+}
+
+async function uploadSingleLocalFileToDiscordChannel(
+  file: LocalUploadableFile,
+  context: ActiveStorageContext,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  const buffer = await fs.readFile(file.filePath);
+  const record = await uploadSingleFileToDiscordChannel(
+    {
+      originalname: file.fileName,
+      mimetype: file.mimeType || "application/octet-stream",
+      buffer,
+      size: file.fileSize,
+    },
+    context,
+    targetChannelId,
+  );
+
+  return {
+    ...record,
+    fileSize: file.fileSize,
+    uploadedAt: file.modifiedAt,
+  };
+}
+
+async function uploadChunkedLocalFileToDiscordChannel(
+  file: LocalUploadableFile,
+  context: ActiveStorageContext,
+  targetChannelId: string,
+  uploadLimitBytes: number,
+): Promise<UploadedFileRecord> {
+  const chunkSize = getChunkSize(uploadLimitBytes);
+  const totalChunks = Math.ceil(file.fileSize / chunkSize);
+  const fullHash = await hashLocalFile(file.filePath);
+  const parts: LibraryItemStoragePart[] = [];
+
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * chunkSize;
+    const size = Math.min(chunkSize, file.fileSize - start);
+    const chunkBuffer = await readLocalFileChunk(file.filePath, start, size);
+    const partName = formatChunkFileName(file.fileName, index, totalChunks);
+    const uploadedPart = await uploadSingleFileToDiscordChannel(
+      {
+        originalname: partName,
+        mimetype: "application/octet-stream",
+        buffer: chunkBuffer,
+        size: chunkBuffer.byteLength,
+      },
+      context,
+      targetChannelId,
+    );
+
+    if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
+      throw new Error(`Discord did not return storage metadata for ${partName}.`);
+    }
+
+    parts.push({
+      index,
+      fileName: partName,
+      size: chunkBuffer.byteLength,
+      sha256: hashBuffer(chunkBuffer),
+      attachmentUrl: uploadedPart.attachmentUrl,
+      storageChannelId: uploadedPart.storageChannelId,
+      storageMessageId: uploadedPart.storageMessageId,
+    });
+  }
+
+  const firstPart = parts[0];
+  if (!firstPart) {
+    throw new Error(`Cannot upload an empty chunked file: ${file.fileName}.`);
+  }
+
+  return {
+    fileName: file.fileName,
+    fileSize: file.fileSize,
+    mimeType: file.mimeType || "application/octet-stream",
+    guildId: context.guildId,
+    attachmentUrl: firstPart.attachmentUrl,
+    uploadedAt: file.modifiedAt,
+    storageChannelId: firstPart.storageChannelId,
+    storageMessageId: firstPart.storageMessageId,
+    storageManifest: {
+      mode: "chunked",
+      version: 1,
+      chunkSize,
+      totalChunks,
+      totalSize: file.fileSize,
+      sha256: fullHash,
+      parts,
+    },
+  };
+}
+
+export async function uploadLocalFilesToDiscordDrive(
+  files: LocalUploadableFile[],
+  context: ActiveStorageContext,
+): Promise<UploadedFileRecord[]> {
+  const uploadLimitBytes = await getDiscordUploadLimitForGuild(context.guildId);
+  const uploaded: UploadedFileRecord[] = [];
+
+  for (const file of files) {
+    const record =
+      file.fileSize <= uploadLimitBytes
+        ? await uploadSingleLocalFileToDiscordChannel(file, context, context.driveChannelId)
+        : await uploadChunkedLocalFileToDiscordChannel(file, context, context.driveChannelId, uploadLimitBytes);
+
+    uploaded.push(record);
+  }
+
+  return uploaded;
+}
+
+export async function scanDiscordDriveForNewFiles(
+  context: ActiveStorageContext,
+  snapshot: PersistedIndexSnapshot,
+): Promise<DiscordDriveScanResult> {
+  return requestBotJson<DiscordDriveScanResult>(
+    "/files/drive/scan",
+    toJsonBody({ context, knownItems: snapshot.items }),
+  );
 }
 
 export async function refreshIndexSnapshotAttachmentUrls(

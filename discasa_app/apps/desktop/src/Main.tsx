@@ -73,6 +73,7 @@ import {
   clampNumber,
   hexToHsv,
   hexToRgbChannels,
+  importExternalLibraryFiles,
   hsvToHex,
   normalizeHexColor,
   tintHexColor,
@@ -119,8 +120,32 @@ const THUMBNAIL_ZOOM_LEVELS = [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 8
 const DEFAULT_THUMBNAIL_ZOOM_PERCENT = DISCASA_DEFAULT_CONFIG.thumbnailZoomPercent;
 const DEFAULT_GALLERY_DISPLAY_MODE = DISCASA_DEFAULT_CONFIG.galleryDisplayMode;
 const CONFIG_SAVE_DEBOUNCE_MS = 700;
+const DRIVE_IMPORT_INTERVAL_MS = 30000;
 const DISCASA_LIBRARY_ITEM_DRAG_MIME = "application/x-discasa-library-items";
 const DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX = "discasa-library-items:";
+const AUTH_APPLY_PROGRESS_STEP_MS = 1700;
+const AUTH_APPLY_PROGRESS_STEPS = [
+  {
+    title: "Preparing private channels",
+    detail: "Discasa is creating or reusing the drive, index, folder, trash and config channels.",
+  },
+  {
+    title: "Reading Discord snapshots",
+    detail: "Library metadata is being resolved before the interface opens.",
+  },
+  {
+    title: "Refreshing file links",
+    detail: "Stored attachments are being checked so existing files can appear correctly.",
+  },
+  {
+    title: "Importing external files",
+    detail: "Manual uploads in the Discasa drive and local mirror folder are being folded into the library.",
+  },
+  {
+    title: "Organizing the local flow",
+    detail: "Albums, mirror paths and cached previews are being prepared for the selected server.",
+  },
+] as const;
 
 type CachedLibraryState = {
   version: typeof LIBRARY_CACHE_VERSION;
@@ -389,6 +414,7 @@ export function App() {
   const draggingLibraryItemIdsRef = useRef<string[]>([]);
   const nativeDropAlbumIdRef = useRef<string | null>(null);
   const activeGuildIdRef = useRef(activeGuildId);
+  const isExternalImportInFlightRef = useRef(false);
   const libraryCacheGuildIdRef = useRef(initialCachedLibrary ? initialActiveGuildId : "");
   const hasHydratedLibraryCacheRef = useRef(Boolean(initialCachedLibrary));
   const pendingConfigPatchRef = useRef<Partial<DiscasaConfig> | null>(null);
@@ -451,6 +477,27 @@ export function App() {
 
   useEffect(() => {
     activeGuildIdRef.current = activeGuildId;
+  }, [activeGuildId]);
+
+  useEffect(() => {
+    if (!activeGuildId) {
+      return;
+    }
+
+    let disposed = false;
+    const runImport = () => {
+      if (!disposed) {
+        void importExternalFilesInBackground();
+      }
+    };
+
+    runImport();
+    const timer = window.setInterval(runImport, DRIVE_IMPORT_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, [activeGuildId]);
 
   useEffect(() => {
@@ -1559,6 +1606,36 @@ export function App() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
     } finally {
       setIsBusy(false);
+    }
+  }
+
+  async function importExternalFilesInBackground(): Promise<void> {
+    if (!activeGuildIdRef.current || isExternalImportInFlightRef.current) {
+      return;
+    }
+
+    isExternalImportInFlightRef.current = true;
+
+    try {
+      const result = await importExternalLibraryFiles();
+      const importedCount = result.imported.length;
+
+      if (importedCount === 0) {
+        return;
+      }
+
+      const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
+
+      albumsRef.current = nextAlbums;
+      setItems(nextItems);
+      setAlbums(nextAlbums);
+      void loadLocalStorageStatus();
+      setMessage(`${importedCount} external file(s) imported.`);
+      setError("");
+    } catch (caughtError) {
+      console.warn("[Discasa import] Automatic external import failed.", caughtError);
+    } finally {
+      isExternalImportInFlightRef.current = false;
     }
   }
 
@@ -3071,6 +3148,21 @@ export function AuthSetupModal({
   onChooseLocalMirrorFolder,
   onUseDefaultLocalMirrorFolder,
 }: AuthSetupModalProps) {
+  const [applyProgressStepIndex, setApplyProgressStepIndex] = useState(0);
+
+  useEffect(() => {
+    if (!isApplyingGuild) {
+      setApplyProgressStepIndex(0);
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setApplyProgressStepIndex((current) => (current + 1) % AUTH_APPLY_PROGRESS_STEPS.length);
+    }, AUTH_APPLY_PROGRESS_STEP_MS);
+
+    return () => window.clearInterval(timer);
+  }, [isApplyingGuild]);
+
   function renderLoginStep() {
     return (
       <>
@@ -3217,6 +3309,57 @@ export function AuthSetupModal({
     );
   }
 
+  function renderApplyingGuildStep() {
+    const currentProgressStep = AUTH_APPLY_PROGRESS_STEPS[applyProgressStepIndex] ?? AUTH_APPLY_PROGRESS_STEPS[0];
+
+    return (
+      <>
+        <div className="auth-setup-header">
+          <span className="auth-setup-eyebrow">Synchronizing library</span>
+          <h2>Syncing files in {selectedGuildName ?? "the selected server"}</h2>
+          <p>
+            Discasa is resolving the Discord drive, refreshing stored file links and organizing the library before opening
+            the main interface.
+          </p>
+        </div>
+
+        <div className="auth-setup-sync-stage" role="status" aria-live="polite">
+          <div className="auth-setup-sync-animation" aria-hidden="true">
+            <span className="auth-setup-sync-orbit outer" />
+            <span className="auth-setup-sync-orbit inner" />
+            <span className="auth-setup-sync-core" />
+          </div>
+          <div className="auth-setup-sync-copy">
+            <strong>{currentProgressStep.title}</strong>
+            <span>{currentProgressStep.detail}</span>
+          </div>
+        </div>
+
+        <div className="auth-setup-sync-track" aria-hidden="true">
+          {AUTH_APPLY_PROGRESS_STEPS.map((progressStep, index) => (
+            <span
+              key={progressStep.title}
+              className={`auth-setup-sync-track-step ${index <= applyProgressStepIndex ? "active" : ""}`}
+            />
+          ))}
+        </div>
+
+        <ul className="auth-setup-sync-list">
+          {AUTH_APPLY_PROGRESS_STEPS.map((progressStep, index) => (
+            <li
+              key={progressStep.title}
+              className={index === applyProgressStepIndex ? "active" : ""}
+              aria-current={index === applyProgressStepIndex ? "step" : undefined}
+            >
+              <span className="auth-setup-sync-list-marker" aria-hidden="true" />
+              <span>{progressStep.title}</span>
+            </li>
+          ))}
+        </ul>
+      </>
+    );
+  }
+
   function renderApplyStep() {
     return (
       <>
@@ -3315,11 +3458,12 @@ export function AuthSetupModal({
       ariaLabel="Discasa setup"
     >
       <div className="auth-setup-shell">
-        {step === "login" ? renderLoginStep() : null}
-        {step === "waiting" ? renderWaitingStep() : null}
-        {step === "select-server" ? renderServerSelectStep() : null}
-        {step === "invite-bot" ? renderInviteBotStep() : null}
-        {step === "apply-server" ? renderApplyStep() : null}
+        {isApplyingGuild && step !== "local-storage" ? renderApplyingGuildStep() : null}
+        {!isApplyingGuild && step === "login" ? renderLoginStep() : null}
+        {!isApplyingGuild && step === "waiting" ? renderWaitingStep() : null}
+        {!isApplyingGuild && step === "select-server" ? renderServerSelectStep() : null}
+        {!isApplyingGuild && step === "invite-bot" ? renderInviteBotStep() : null}
+        {!isApplyingGuild && step === "apply-server" ? renderApplyStep() : null}
         {step === "local-storage" ? renderLocalStorageStep() : null}
       </div>
     </BaseModal>

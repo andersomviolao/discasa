@@ -4,6 +4,7 @@ import type {
   AppSession,
   CreateAlbumInput,
   DiscasaConfig,
+  DiscasaExternalImportResult,
   DiscasaInitializationResponse,
   GuildSummary,
   LibraryItem,
@@ -690,6 +691,12 @@ export async function uploadFiles(files: File[], albumId?: string): Promise<Uplo
   return requestJson<UploadResponse>("/api/upload", {
     method: "POST",
     body,
+  });
+}
+
+export async function importExternalLibraryFiles(): Promise<DiscasaExternalImportResult> {
+  return requestJson<DiscasaExternalImportResult>("/api/library/import-external-files", {
+    method: "POST",
   });
 }
 

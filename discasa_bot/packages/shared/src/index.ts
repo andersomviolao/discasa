@@ -38,6 +38,25 @@ export type DiscasaInitializationResponse = {
   };
 };
 
+export type DiscasaDriveImportResult = {
+  imported: LibraryItem[];
+  scannedAttachmentCount: number;
+  skippedAttachmentCount: number;
+  skippedGroupedMessageCount: number;
+};
+
+export type DiscasaLocalMirrorImportResult = {
+  imported: LibraryItem[];
+  scannedFileCount: number;
+  skippedFileCount: number;
+};
+
+export type DiscasaExternalImportResult = {
+  imported: LibraryItem[];
+  discordDrive: DiscasaDriveImportResult;
+  localMirror: DiscasaLocalMirrorImportResult;
+};
+
 export type AlbumRecord = {
   id: string;
   name: string;

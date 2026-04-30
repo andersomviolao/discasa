@@ -22,6 +22,7 @@ import {
   readLatestIndexSnapshot,
   refreshIndexSnapshotAttachmentUrls,
   restoreStoredItemFromTrash,
+  scanDiscordDriveForNewFiles,
   syncConfigSnapshot,
   syncFolderSnapshot,
   syncIndexSnapshot,
@@ -161,6 +162,18 @@ app.post("/files/delete", async (request, response, next) => {
   try {
     await deleteStoredItemFromDiscord(readContext(request.body.context), readItem(request.body.item));
     response.json({ deleted: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/files/drive/scan", async (request, response, next) => {
+  try {
+    const rawItems = Array.isArray(request.body.knownItems) ? request.body.knownItems : [];
+    response.json(await scanDiscordDriveForNewFiles(
+      readContext(request.body.context),
+      rawItems as PersistedIndexSnapshot["items"],
+    ));
   } catch (error) {
     next(error);
   }

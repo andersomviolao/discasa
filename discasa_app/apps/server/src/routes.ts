@@ -1,13 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
-import type { DiscasaAttachmentRecoveryWarning, SaveLibraryItemMediaEditInput } from "@discasa/shared";
+import type {
+  DiscasaAttachmentRecoveryWarning,
+  DiscasaExternalImportResult,
+  DiscasaDriveImportResult,
+  DiscasaLocalMirrorImportResult,
+  SaveLibraryItemMediaEditInput,
+} from "@discasa/shared";
 import { env } from "./config";
 import {
   addAlbum,
   addLibraryItemsToAlbum,
   addMockFiles,
   addUploadedFiles,
+  adoptLocalMirrorImportedFiles,
   cacheUploadedFilesForLocalAccess,
   clearPersistedAuthSession,
   createConfigSnapshot,
@@ -36,6 +43,7 @@ import {
   saveLibraryItemMediaEdit,
   setActiveStorageContext,
   setPersistedAuthSession,
+  scanLocalMirrorImportCandidates,
   toggleFavoriteState,
   trashLibraryItem,
   updateDiscasaConfig,
@@ -55,10 +63,12 @@ import {
   readLatestIndexSnapshot,
   refreshIndexSnapshotAttachmentUrls,
   restoreStoredItemFromTrash,
+  scanDiscordDriveForNewFiles,
   syncConfigSnapshot,
   syncFolderSnapshot,
   syncIndexSnapshot,
   uploadFilesToDiscordDrive,
+  uploadLocalFilesToDiscordDrive,
 } from "./bot-client";
 import {
   DiscordAuthorizationError,
@@ -119,7 +129,95 @@ async function syncRemoteLibraryState(): Promise<void> {
   await Promise.all([syncRemoteIndexState(), syncRemoteFolderState()]);
 }
 
-async function hydrateRemoteLibraryState(): Promise<void> {
+async function importNewDiscordDriveFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaDriveImportResult> {
+  const context = getActiveStorageContext();
+  if (!context || env.mockMode) {
+    return {
+      imported: [],
+      scannedAttachmentCount: 0,
+      skippedAttachmentCount: 0,
+      skippedGroupedMessageCount: 0,
+    };
+  }
+
+  const scan = await scanDiscordDriveForNewFiles(context, createIndexSnapshot());
+  const imported = scan.records.length > 0 ? addUploadedFiles(scan.records) : [];
+
+  if (imported.length > 0 && options.syncRemote !== false) {
+    await syncRemoteIndexState();
+  }
+
+  return {
+    imported,
+    scannedAttachmentCount: scan.scannedAttachmentCount,
+    skippedAttachmentCount: scan.skippedAttachmentCount,
+    skippedGroupedMessageCount: scan.skippedGroupedMessageCount,
+  };
+}
+
+async function importNewLocalMirrorFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaLocalMirrorImportResult> {
+  const scan = scanLocalMirrorImportCandidates();
+  if (scan.candidates.length === 0) {
+    return {
+      imported: [],
+      scannedFileCount: scan.scannedFileCount,
+      skippedFileCount: scan.skippedFileCount,
+    };
+  }
+
+  const context = getActiveStorageContext();
+  const records = env.mockMode
+    ? scan.candidates.map((file) => ({
+        fileName: file.fileName,
+        fileSize: file.fileSize,
+        mimeType: file.mimeType,
+        guildId: context?.guildId ?? "mock_active_guild",
+        attachmentUrl: `mock://local-mirror/${encodeURIComponent(file.fileName)}`,
+        uploadedAt: file.modifiedAt,
+      }))
+    : context
+      ? await uploadLocalFilesToDiscordDrive(scan.candidates, context)
+      : [];
+
+  if (records.length === 0) {
+    return {
+      imported: [],
+      scannedFileCount: scan.scannedFileCount,
+      skippedFileCount: scan.skippedFileCount + scan.candidates.length,
+    };
+  }
+
+  const imported = addUploadedFiles(records);
+  adoptLocalMirrorImportedFiles(imported, scan.candidates);
+
+  if (imported.length > 0 && options.syncRemote !== false) {
+    await syncRemoteIndexState();
+  }
+
+  return {
+    imported,
+    scannedFileCount: scan.scannedFileCount,
+    skippedFileCount: scan.skippedFileCount,
+  };
+}
+
+async function importExternalLibraryFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaExternalImportResult> {
+  const discordDrive = await importNewDiscordDriveFiles({ syncRemote: false });
+  const localMirror = await importNewLocalMirrorFiles({ syncRemote: false });
+  const imported = [...discordDrive.imported, ...localMirror.imported];
+
+  if (imported.length > 0 && options.syncRemote !== false) {
+    await syncRemoteIndexState();
+  }
+
+  return {
+    imported,
+    discordDrive,
+    localMirror,
+  };
+}
+
+async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolean } = {}): Promise<void> {
   const context = getActiveStorageContext();
   if (!context || env.mockMode) {
     return;
@@ -155,6 +253,17 @@ async function hydrateRemoteLibraryState(): Promise<void> {
 
     if (folderSnapshot) {
       replaceDatabaseFromFolderSnapshot(folderSnapshot);
+    }
+
+    if (options.importExternalFiles !== false) {
+      try {
+        const importResult = await importExternalLibraryFiles();
+        if (importResult.imported.length > 0) {
+          console.info(`[Discasa import] Imported ${importResult.imported.length} external file(s).`);
+        }
+      } catch (error) {
+        console.warn("[Discasa import] Could not import external files during hydration.", error);
+      }
     }
 
     remoteLibraryHydrationKey = hydrationKey;
@@ -409,6 +518,11 @@ router.post("/discasa/initialize", async (request, response, next) => {
       replaceConfigFromSnapshot(configSnapshot);
     } else {
       resetDiscasaConfig();
+    }
+
+    const externalImport = await importExternalLibraryFiles({ syncRemote: false });
+    if (externalImport.imported.length > 0) {
+      indexDidChange = true;
     }
 
     if (!hasCurrentIndex || indexDidChange) {
@@ -671,6 +785,20 @@ router.get("/library", async (_request, response, next) => {
   try {
     await hydrateRemoteLibraryState();
     response.json(getLibraryItems());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/library/import-external-files", async (_request, response, next) => {
+  try {
+    if (!env.mockMode && !getActiveStorageContext()) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before syncing external files." });
+      return;
+    }
+
+    await hydrateRemoteLibraryState({ importExternalFiles: false });
+    response.json(await importExternalLibraryFiles());
   } catch (error) {
     next(error);
   }

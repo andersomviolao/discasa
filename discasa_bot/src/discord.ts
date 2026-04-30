@@ -21,6 +21,7 @@ import {
   GatewayIntentBits,
   Message,
   PermissionsBitField,
+  type Attachment,
   type Guild,
   type GuildTextBasedChannel,
   type OverwriteResolvable,
@@ -103,6 +104,13 @@ export type RefreshIndexSnapshotResult = {
   didChange: boolean;
 };
 
+export type DiscordDriveScanResult = {
+  records: UploadedFileRecord[];
+  scannedAttachmentCount: number;
+  skippedAttachmentCount: number;
+  skippedGroupedMessageCount: number;
+};
+
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
 const LEGACY_INDEX_SNAPSHOT_FILENAME = "discasa-index.json";
 const FOLDER_SNAPSHOT_FILENAME = "discasa-folder.snapshot.json";
@@ -110,15 +118,11 @@ const CONFIG_SNAPSHOT_FILENAME = "discasa-config.snapshot.json";
 const INSTALL_MARKER_FILENAME = "discasa-install.marker.json";
 const LEGACY_FOLDER_CHANNEL_NAME = "discasa-folder";
 const LEGACY_CONFIG_CHANNEL_NAME = "discasa-config";
-const DEFAULT_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
-const LEVEL_TWO_UPLOAD_LIMIT_BYTES = 50 * 1024 * 1024;
-const LEVEL_THREE_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
+const DISCASA_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
+const DISCASA_CHUNK_PART_FILENAME_PATTERN = /\.discasa\.part\d+$/i;
 let botClient: Client | null = null;
 let botClientReadyPromise: Promise<Client> | null = null;
-
-type DiscordGuildMetadata = {
-  premium_tier?: number;
-};
+let discordWriteQueueTail: Promise<void> = Promise.resolve();
 
 function formatBytes(value: number): string {
   const megabytes = value / (1024 * 1024);
@@ -130,16 +134,13 @@ function formatBytes(value: number): string {
   return `${megabytes.toFixed(1)} MB`;
 }
 
-function getUploadLimitFromPremiumTier(premiumTier: number): number {
-  if (premiumTier >= 3) {
-    return LEVEL_THREE_UPLOAD_LIMIT_BYTES;
-  }
-
-  if (premiumTier >= 2) {
-    return LEVEL_TWO_UPLOAD_LIMIT_BYTES;
-  }
-
-  return DEFAULT_UPLOAD_LIMIT_BYTES;
+async function enqueueDiscordWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const queued = discordWriteQueueTail.then(operation, operation);
+  discordWriteQueueTail = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
 }
 
 function hasChunkedStorage(
@@ -149,36 +150,8 @@ function hasChunkedStorage(
 }
 
 export async function getDiscordUploadLimitForGuild(guildId: string): Promise<number> {
-  if (env.mockMode || !env.discordBotToken) {
-    return DEFAULT_UPLOAD_LIMIT_BYTES;
-  }
-
-  try {
-    const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
-      headers: {
-        Authorization: `Bot ${env.discordBotToken}`,
-      },
-    });
-
-    if (!response.ok) {
-      console.error("[Discord API] Failed to fetch guild metadata for upload limit.", {
-        guildId,
-        status: response.status,
-        statusText: response.statusText,
-      });
-      return DEFAULT_UPLOAD_LIMIT_BYTES;
-    }
-
-    const payload = (await response.json()) as DiscordGuildMetadata;
-    const premiumTier = typeof payload.premium_tier === "number" ? payload.premium_tier : 0;
-    return getUploadLimitFromPremiumTier(premiumTier);
-  } catch (error) {
-    console.error("[Discord API] Could not resolve guild upload limit.", {
-      guildId,
-      error,
-    });
-    return DEFAULT_UPLOAD_LIMIT_BYTES;
-  }
+  void guildId;
+  return DISCASA_UPLOAD_LIMIT_BYTES;
 }
 
 export function getUploadTooLargeMessage(
@@ -187,7 +160,7 @@ export function getUploadTooLargeMessage(
 ): string {
   const fileList = files.map((file) => `${file.originalname} (${formatBytes(file.size)})`).join(", ");
 
-  return `File too large for Discord on this server. Limit: ${formatBytes(uploadLimitBytes)}. Rejected: ${fileList}.`;
+  return `File too large for Discasa's Discord storage limit. Limit: ${formatBytes(uploadLimitBytes)}. Rejected: ${fileList}.`;
 }
 
 async function getBotClient(): Promise<Client | null> {
@@ -434,7 +407,7 @@ async function deleteDiscordMessage(channelId: string, messageId: string): Promi
 
   try {
     const message = await channel.messages.fetch(messageId);
-    await message.delete();
+    await enqueueDiscordWrite(() => message.delete());
   } catch {
     // Ignore missing messages so the index can still recover.
   }
@@ -458,14 +431,16 @@ async function sendBufferToChannel(
   guildId: string,
 ): Promise<UploadedFileRecord> {
   const channel = await getGuildTextChannel(channelId);
-  const sentMessage = await channel.send({
-    files: [
-      {
-        attachment: fileBuffer,
-        name: fileName,
-      },
-    ],
-  });
+  const sentMessage = await enqueueDiscordWrite(() =>
+    channel.send({
+      files: [
+        {
+          attachment: fileBuffer,
+          name: fileName,
+        },
+      ],
+    }),
+  );
 
   const attachment =
     [...sentMessage.attachments.values()].find((entry) => entry.name === fileName) ??
@@ -481,6 +456,7 @@ async function sendBufferToChannel(
     mimeType: attachment.contentType || mimeType || "application/octet-stream",
     guildId,
     attachmentUrl: attachment.url,
+    uploadedAt: sentMessage.createdAt.toISOString(),
     storageChannelId: channelId,
     storageMessageId: sentMessage.id,
   };
@@ -503,6 +479,147 @@ function getAttachmentPointerFromMessage(
     channelId: message.channelId,
     messageId: message.id,
     attachmentUrl: attachment.url,
+  };
+}
+
+type KnownDriveAttachmentIndex = {
+  messageAttachmentKeys: Set<string>;
+  attachmentUrls: Set<string>;
+};
+
+function getStorageMessageKey(channelId?: string, messageId?: string): string | null {
+  if (!channelId || !messageId) {
+    return null;
+  }
+
+  return `${channelId}:${messageId}`;
+}
+
+function getStorageMessageAttachmentKey(
+  channelId: string | undefined,
+  messageId: string | undefined,
+  fileName: string | undefined,
+  fileSize: number | undefined,
+): string | null {
+  const messageKey = getStorageMessageKey(channelId, messageId);
+
+  if (!messageKey || !fileName || typeof fileSize !== "number") {
+    return null;
+  }
+
+  return `${messageKey}:${fileName}:${fileSize}`;
+}
+
+function addKnownStorageReference(
+  index: KnownDriveAttachmentIndex,
+  reference: {
+    fileName?: string;
+    fileSize?: number;
+    attachmentUrl?: string;
+    storageChannelId?: string;
+    storageMessageId?: string;
+    storageManifest?: LibraryItemStorageManifest | null;
+  },
+): void {
+  const messageAttachmentKey = getStorageMessageAttachmentKey(
+    reference.storageChannelId,
+    reference.storageMessageId,
+    reference.fileName,
+    reference.fileSize,
+  );
+
+  if (messageAttachmentKey) {
+    index.messageAttachmentKeys.add(messageAttachmentKey);
+  }
+
+  if (reference.attachmentUrl) {
+    index.attachmentUrls.add(reference.attachmentUrl);
+  }
+
+  if (reference.storageManifest?.mode === "chunked") {
+    for (const part of reference.storageManifest.parts) {
+      const partMessageAttachmentKey = getStorageMessageAttachmentKey(
+        part.storageChannelId,
+        part.storageMessageId,
+        part.fileName,
+        part.size,
+      );
+
+      if (partMessageAttachmentKey) {
+        index.messageAttachmentKeys.add(partMessageAttachmentKey);
+      }
+
+      index.attachmentUrls.add(part.attachmentUrl);
+    }
+  }
+}
+
+function createKnownDriveAttachmentIndex(items: LibraryItemIndex[]): KnownDriveAttachmentIndex {
+  const index: KnownDriveAttachmentIndex = {
+    messageAttachmentKeys: new Set(),
+    attachmentUrls: new Set(),
+  };
+
+  for (const item of items) {
+    addKnownStorageReference(index, {
+      ...item,
+      fileName: item.name,
+      fileSize: item.size,
+    });
+
+    if (item.originalSource) {
+      addKnownStorageReference(index, item.originalSource);
+    }
+  }
+
+  return index;
+}
+
+function isDiscasaManagedDriveAttachment(fileName: string): boolean {
+  return (
+    DISCASA_CHUNK_PART_FILENAME_PATTERN.test(fileName) ||
+    fileName === INDEX_SNAPSHOT_FILENAME ||
+    fileName === LEGACY_INDEX_SNAPSHOT_FILENAME ||
+    fileName === FOLDER_SNAPSHOT_FILENAME ||
+    fileName === CONFIG_SNAPSHOT_FILENAME ||
+    fileName === INSTALL_MARKER_FILENAME
+  );
+}
+
+function isKnownDriveAttachment(
+  context: ActiveStorageContext,
+  message: Message<boolean>,
+  attachment: Attachment,
+  known: KnownDriveAttachmentIndex,
+): boolean {
+  const messageAttachmentKey = getStorageMessageAttachmentKey(
+    context.driveChannelId,
+    message.id,
+    attachment.name ?? undefined,
+    attachment.size,
+  );
+
+  return Boolean(
+    (messageAttachmentKey && known.messageAttachmentKeys.has(messageAttachmentKey)) ||
+      known.attachmentUrls.has(attachment.url) ||
+      (attachment.proxyURL ? known.attachmentUrls.has(attachment.proxyURL) : false),
+  );
+}
+
+function toUploadedFileRecordFromAttachment(
+  context: ActiveStorageContext,
+  message: Message<boolean>,
+  attachment: Attachment,
+): UploadedFileRecord {
+  return {
+    fileName: attachment.name ?? "discord-file",
+    fileSize: attachment.size,
+    mimeType: attachment.contentType || "application/octet-stream",
+    guildId: context.guildId,
+    attachmentUrl: attachment.url,
+    uploadedAt: message.createdAt.toISOString(),
+    storageChannelId: context.driveChannelId,
+    storageMessageId: message.id,
   };
 }
 
@@ -1062,19 +1179,21 @@ async function writeSnapshotToChannel(
     [...message.attachments.values()].some((attachment) => cleanupFileNames.includes(attachment.name ?? "")),
   );
 
-  await channel.send({
-    content: `${label} ${new Date().toISOString()}`,
-    files: [
-      {
-        attachment: Buffer.from(content, "utf8"),
-        name: fileName,
-      },
-    ],
-  });
+  await enqueueDiscordWrite(() =>
+    channel.send({
+      content: `${label} ${new Date().toISOString()}`,
+      files: [
+        {
+          attachment: Buffer.from(content, "utf8"),
+          name: fileName,
+        },
+      ],
+    }),
+  );
 
   for (const message of staleMessages) {
     try {
-      await message.delete();
+      await enqueueDiscordWrite(() => message.delete());
     } catch {
       // Ignore stale cleanup failures so the latest snapshot still wins.
     }
@@ -1490,6 +1609,71 @@ export async function uploadFilesToDiscordDrive(
   context: ActiveStorageContext,
 ): Promise<UploadedFileRecord[]> {
   return uploadFilesToDiscordChannel(files, context, context.driveChannelId);
+}
+
+export async function scanDiscordDriveForNewFiles(
+  context: ActiveStorageContext,
+  knownItems: LibraryItemIndex[],
+): Promise<DiscordDriveScanResult> {
+  if (env.mockMode) {
+    return {
+      records: [],
+      scannedAttachmentCount: 0,
+      skippedAttachmentCount: 0,
+      skippedGroupedMessageCount: 0,
+    };
+  }
+
+  const channel = await getGuildTextChannel(context.driveChannelId);
+  const known = createKnownDriveAttachmentIndex(knownItems);
+  const records: UploadedFileRecord[] = [];
+  let scannedAttachmentCount = 0;
+  let skippedAttachmentCount = 0;
+  let skippedGroupedMessageCount = 0;
+  let beforeMessageId: string | undefined;
+
+  while (true) {
+    const messages = await channel.messages.fetch(beforeMessageId ? { limit: 100, before: beforeMessageId } : { limit: 100 });
+
+    if (messages.size === 0) {
+      break;
+    }
+
+    for (const message of messages.values()) {
+      const attachments = [...message.attachments.values()];
+
+      if (attachments.length === 0) {
+        continue;
+      }
+
+      scannedAttachmentCount += attachments.length;
+
+      for (const attachment of attachments) {
+        const fileName = attachment.name ?? "discord-file";
+
+        if (isDiscasaManagedDriveAttachment(fileName) || isKnownDriveAttachment(context, message, attachment, known)) {
+          skippedAttachmentCount += 1;
+          continue;
+        }
+
+        records.push(toUploadedFileRecordFromAttachment(context, message, attachment));
+      }
+    }
+
+    const oldestMessage = [...messages.values()].at(-1);
+    if (!oldestMessage || messages.size < 100) {
+      break;
+    }
+
+    beforeMessageId = oldestMessage.id;
+  }
+
+  return {
+    records,
+    scannedAttachmentCount,
+    skippedAttachmentCount,
+    skippedGroupedMessageCount,
+  };
 }
 
 function assertWritableFileStorageChannel(context: ActiveStorageContext, channelId: string): void {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import type { Stats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,9 +51,24 @@ export type UploadedFileRecord = {
   mimeType: string;
   guildId: string;
   attachmentUrl: string;
+  uploadedAt?: string;
   storageChannelId?: string;
   storageMessageId?: string;
   storageManifest?: LibraryItemStorageManifest | null;
+};
+
+export type LocalMirrorImportCandidate = {
+  filePath: string;
+  fileName: string;
+  fileSize: number;
+  mimeType: string;
+  modifiedAt: string;
+};
+
+export type LocalMirrorImportScan = {
+  candidates: LocalMirrorImportCandidate[];
+  scannedFileCount: number;
+  skippedFileCount: number;
 };
 
 type LegacyPersistedAlbum = {
@@ -125,6 +141,7 @@ const cacheDir = path.join(getLocalAppDataRoot(), appDirectoryName, "Cache");
 const defaultLocalMirrorDir = path.join(cacheDir, "files");
 const thumbnailCacheDir = path.join(cacheDir, "thumbnails");
 const apiBaseUrl = "http://localhost:3001";
+const LOCAL_MIRROR_IMPORT_STABLE_MS = 3000;
 let didAttemptLegacyStorageMigration = false;
 
 function areSamePath(left: string, right: string): boolean {
@@ -134,6 +151,11 @@ function areSamePath(left: string, right: string): boolean {
   return process.platform === "win32"
     ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
     : resolvedLeft === resolvedRight;
+}
+
+function normalizePathKey(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function copyFileIfDestinationMissing(sourcePath: string, targetPath: string): void {
@@ -875,6 +897,48 @@ function getThumbnailCacheFilePath(item: Pick<PersistedItem, "id" | "name">): st
   return path.join(thumbnailCacheDir, getManagedLocalFileName(item));
 }
 
+function inferMimeTypeFromFileName(fileName: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  const knownTypes: Record<string, string> = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".gif": "image/gif",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".webp": "image/webp",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
+    ".m4a": "audio/mp4",
+    ".mp3": "audio/mpeg",
+    ".oga": "audio/ogg",
+    ".ogg": "audio/ogg",
+    ".wav": "audio/wav",
+    ".weba": "audio/webm",
+    ".avi": "video/x-msvideo",
+    ".m4v": "video/x-m4v",
+    ".mkv": "video/x-matroska",
+    ".mov": "video/quicktime",
+    ".mp4": "video/mp4",
+    ".mpeg": "video/mpeg",
+    ".mpg": "video/mpeg",
+    ".ogv": "video/ogg",
+    ".webm": "video/webm",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".json": "application/json",
+    ".csv": "text/csv",
+  };
+
+  return knownTypes[extension] ?? "application/octet-stream";
+}
+
 function hasReadableFile(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
@@ -1090,6 +1154,109 @@ function queueLocalMirrorSynchronization(): void {
   });
 }
 
+function isTemporaryLocalMirrorFile(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith(".tmp") || lower.endsWith(".temp") || lower.endsWith(".crdownload") || lower.endsWith(".part");
+}
+
+function createManagedLocalMirrorPathIndex(mirrorRoot: string): Set<string> {
+  return new Set(database.items.map((item) => normalizePathKey(getLocalMirrorFilePath(item, mirrorRoot))));
+}
+
+export function scanLocalMirrorImportCandidates(): LocalMirrorImportScan {
+  if (!database.config.localMirrorEnabled || needsLocalMirrorPathSelection()) {
+    return {
+      candidates: [],
+      scannedFileCount: 0,
+      skippedFileCount: 0,
+    };
+  }
+
+  const mirrorRoot = getResolvedLocalMirrorPath();
+  const managedPaths = createManagedLocalMirrorPathIndex(mirrorRoot);
+  const candidates: LocalMirrorImportCandidate[] = [];
+  let scannedFileCount = 0;
+  let skippedFileCount = 0;
+
+  try {
+    fs.mkdirSync(mirrorRoot, { recursive: true });
+    const entries = fs.readdirSync(mirrorRoot, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const filePath = path.join(mirrorRoot, entry.name);
+      if (managedPaths.has(normalizePathKey(filePath))) {
+        continue;
+      }
+
+      scannedFileCount += 1;
+
+      if (isTemporaryLocalMirrorFile(entry.name)) {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      let stat: Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      if (!stat.isFile() || stat.size <= 0 || Date.now() - stat.mtimeMs < LOCAL_MIRROR_IMPORT_STABLE_MS) {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      candidates.push({
+        filePath,
+        fileName: entry.name,
+        fileSize: stat.size,
+        mimeType: inferMimeTypeFromFileName(entry.name),
+        modifiedAt: stat.mtime.toISOString(),
+      });
+    }
+  } catch (error) {
+    console.warn("[Discasa local mirror] Could not scan the local mirror folder for imported files.", error);
+  }
+
+  return {
+    candidates,
+    scannedFileCount,
+    skippedFileCount,
+  };
+}
+
+export function adoptLocalMirrorImportedFiles(items: LibraryItem[], candidates: LocalMirrorImportCandidate[]): void {
+  items.forEach((item, index) => {
+    const candidate = candidates[index];
+    const persistedItem = findPersistedItem(item.id);
+
+    if (!candidate || !persistedItem) {
+      return;
+    }
+
+    const targetPath = getLocalMirrorFilePath(persistedItem);
+
+    try {
+      if (!areSamePath(candidate.filePath, targetPath)) {
+        copyOrMoveManagedFile(candidate.filePath, targetPath);
+      }
+
+      if (isPreviewCacheEligible(persistedItem) && hasReadableFile(targetPath)) {
+        ensureParentDir(getThumbnailCacheFilePath(persistedItem));
+        fs.copyFileSync(targetPath, getThumbnailCacheFilePath(persistedItem));
+      }
+    } catch (error) {
+      console.warn("[Discasa local mirror] Could not adopt an imported local mirror file.", error);
+    }
+  });
+}
+
 function applyLocalMirrorConfigChange(
   previousConfig: DiscasaConfig,
   nextConfig: DiscasaConfig,
@@ -1208,7 +1375,7 @@ function createStoredLibraryItem(file: UploadedFileRecord): PersistedItem {
     mimeType: file.mimeType || "application/octet-stream",
     status: "stored",
     guildId: file.guildId,
-    uploadedAt: new Date().toISOString(),
+    uploadedAt: file.uploadedAt ?? new Date().toISOString(),
     attachmentUrl: file.attachmentUrl,
     attachmentStatus: "ready",
     isFavorite: false,

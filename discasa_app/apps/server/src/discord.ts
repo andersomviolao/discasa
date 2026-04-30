@@ -38,7 +38,7 @@ export function getUploadTooLargeMessage(
 ): string {
   const fileList = files.map((file) => `${file.originalname} (${formatBytes(file.size)})`).join(", ");
 
-  return `File too large for Discord on this server. Limit: ${formatBytes(uploadLimitBytes)}. Rejected: ${fileList}.`;
+  return `File too large for Discasa's Discord storage limit. Limit: ${formatBytes(uploadLimitBytes)}. Rejected: ${fileList}.`;
 }
 
 async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {

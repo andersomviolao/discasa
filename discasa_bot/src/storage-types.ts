@@ -23,6 +23,7 @@ export type UploadedFileRecord = {
   mimeType: string;
   guildId: string;
   attachmentUrl: string;
+  uploadedAt?: string;
   storageChannelId?: string;
   storageMessageId?: string;
   storageManifest?: LibraryItemStorageManifest | null;

@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Router, type Request, type Response } from "express";
@@ -8,6 +8,8 @@ import type {
   DiscasaExternalImportResult,
   DiscasaDriveImportResult,
   DiscasaLocalMirrorImportResult,
+  DiscasaWatchedFolderImportResult,
+  LibraryItem,
   SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
 import { env } from "./config";
@@ -49,6 +51,7 @@ import {
   setActiveStorageContext,
   setPersistedAuthSession,
   scanLocalMirrorImportCandidates,
+  scanWatchedFolderImportCandidates,
   toggleFavoriteState,
   trashLibraryItem,
   updateDiscasaConfig,
@@ -134,14 +137,81 @@ function readClientUploadIds(rawIds: unknown, expectedLength: number): Array<str
   });
 }
 
-async function readLocalSourceFiles(rawPaths: unknown): Promise<LocalSourceFile[]> {
+type LocalUploadBatch = {
+  files: LocalSourceFile[];
+  albumId?: string;
+  albumName?: string;
+  clientUploadIds?: Array<string | undefined>;
+};
+
+function hashBuffer(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function hashLocalFile(filePath: string): Promise<string | undefined> {
+  try {
+    return hashBuffer(await fs.readFile(filePath));
+  } catch {
+    return undefined;
+  }
+}
+
+async function readLocalSourceFile(filePath: string): Promise<LocalSourceFile | null> {
+  const stat = await fs.stat(filePath);
+
+  if (!stat.isFile()) {
+    return null;
+  }
+
+  const fileName = path.basename(filePath);
+  return {
+    filePath,
+    fileName,
+    fileSize: stat.size,
+    mimeType: inferMimeTypeFromFileName(fileName),
+    modifiedAt: stat.mtime.toISOString(),
+    contentHash: await hashLocalFile(filePath),
+  };
+}
+
+async function collectLocalSourceFilesFromDirectory(directoryPath: string): Promise<LocalSourceFile[]> {
+  const files: LocalSourceFile[] = [];
+  const entries = await fs.readdir(directoryPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const entryPath = path.join(directoryPath, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...(await collectLocalSourceFilesFromDirectory(entryPath)));
+      continue;
+    }
+
+    if (!entry.isFile()) {
+      continue;
+    }
+
+    const file = await readLocalSourceFile(entryPath);
+    if (file) {
+      files.push(file);
+    }
+  }
+
+  return files;
+}
+
+async function readLocalUploadBatches(
+  rawPaths: unknown,
+  options: { albumId?: string; clientUploadIds?: Array<string | undefined> } = {},
+): Promise<LocalUploadBatch[]> {
   if (!Array.isArray(rawPaths)) {
     throw new Error("filePaths must be an array.");
   }
 
-  const files: LocalSourceFile[] = [];
+  const directFiles: LocalSourceFile[] = [];
+  const directClientUploadIds: Array<string | undefined> = [];
+  const batches: LocalUploadBatch[] = [];
 
-  for (const rawPath of rawPaths) {
+  for (const [index, rawPath] of rawPaths.entries()) {
     if (typeof rawPath !== "string" || rawPath.length === 0) {
       continue;
     }
@@ -149,21 +219,37 @@ async function readLocalSourceFiles(rawPaths: unknown): Promise<LocalSourceFile[
     const filePath = path.resolve(rawPath);
     const stat = await fs.stat(filePath);
 
+    if (stat.isDirectory()) {
+      const files = await collectLocalSourceFilesFromDirectory(filePath);
+      if (files.length > 0) {
+        batches.push({
+          files,
+          albumName: path.basename(filePath),
+        });
+      }
+      continue;
+    }
+
     if (!stat.isFile()) {
       continue;
     }
 
-    const fileName = path.basename(filePath);
-    files.push({
-      filePath,
-      fileName,
-      fileSize: stat.size,
-      mimeType: inferMimeTypeFromFileName(fileName),
-      modifiedAt: stat.mtime.toISOString(),
+    const file = await readLocalSourceFile(filePath);
+    if (file) {
+      directFiles.push(file);
+      directClientUploadIds.push(options.clientUploadIds?.[index]);
+    }
+  }
+
+  if (directFiles.length > 0) {
+    batches.unshift({
+      files: directFiles,
+      albumId: options.albumId,
+      clientUploadIds: directClientUploadIds,
     });
   }
 
-  return files;
+  return batches;
 }
 
 function getRemoteLibraryHydrationKey(context: NonNullable<ReturnType<typeof getActiveStorageContext>>): string {
@@ -253,12 +339,17 @@ async function importNewLocalMirrorFiles(options: { syncRemote?: boolean } = {})
         guildId: context?.guildId ?? "mock_active_guild",
         attachmentUrl: `mock://local-mirror/${encodeURIComponent(file.fileName)}`,
         uploadedAt: file.modifiedAt,
+        contentHash: file.contentHash,
       }))
     : context
       ? await uploadLocalFilesToDiscordDrive(scan.candidates, context)
       : [];
+  const recordsWithLocalMetadata = records.map((record, index) => ({
+    ...record,
+    contentHash: scan.candidates[index]?.contentHash,
+  }));
 
-  if (records.length === 0) {
+  if (recordsWithLocalMetadata.length === 0) {
     return {
       imported: [],
       scannedFileCount: scan.scannedFileCount,
@@ -266,8 +357,63 @@ async function importNewLocalMirrorFiles(options: { syncRemote?: boolean } = {})
     };
   }
 
-  const imported = addUploadedFiles(records);
+  const imported = addUploadedFiles(recordsWithLocalMetadata);
   adoptLocalMirrorImportedFiles(imported, scan.candidates);
+
+  if (imported.length > 0 && options.syncRemote !== false) {
+    await syncRemoteIndexState();
+  }
+
+  return {
+    imported,
+    scannedFileCount: scan.scannedFileCount,
+    skippedFileCount: scan.skippedFileCount,
+  };
+}
+
+async function importNewWatchedFolderFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaWatchedFolderImportResult> {
+  const scan = scanWatchedFolderImportCandidates();
+  if (scan.candidates.length === 0) {
+    return {
+      imported: [],
+      scannedFileCount: scan.scannedFileCount,
+      skippedFileCount: scan.skippedFileCount,
+    };
+  }
+
+  const context = getActiveStorageContext();
+  const records = env.mockMode
+    ? scan.candidates.map((file) => ({
+        fileName: file.fileName,
+        fileSize: file.fileSize,
+        mimeType: file.mimeType,
+        guildId: context?.guildId ?? "mock_active_guild",
+        attachmentUrl: `mock://watched/${encodeURIComponent(file.fileName)}`,
+        uploadedAt: file.modifiedAt,
+        contentHash: file.contentHash,
+        sourceCollection: file.sourceCollection,
+        sourceFingerprint: file.sourceFingerprint,
+      }))
+    : context
+      ? await uploadLocalFilesToDiscordDrive(scan.candidates, context)
+      : [];
+  const recordsWithWatchedMetadata = records.map((record, index) => ({
+    ...record,
+    contentHash: scan.candidates[index]?.contentHash,
+    sourceCollection: "watched" as const,
+    sourceFingerprint: scan.candidates[index]?.sourceFingerprint,
+  }));
+
+  if (recordsWithWatchedMetadata.length === 0) {
+    return {
+      imported: [],
+      scannedFileCount: scan.scannedFileCount,
+      skippedFileCount: scan.skippedFileCount + scan.candidates.length,
+    };
+  }
+
+  const imported = addUploadedFiles(recordsWithWatchedMetadata);
+  cacheUploadedLocalFilesForLocalAccess(imported, scan.candidates);
 
   if (imported.length > 0 && options.syncRemote !== false) {
     await syncRemoteIndexState();
@@ -283,7 +429,8 @@ async function importNewLocalMirrorFiles(options: { syncRemote?: boolean } = {})
 async function importExternalLibraryFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaExternalImportResult> {
   const discordDrive = await importNewDiscordDriveFiles({ syncRemote: false });
   const localMirror = await importNewLocalMirrorFiles({ syncRemote: false });
-  const imported = [...discordDrive.imported, ...localMirror.imported];
+  const watchedFolder = await importNewWatchedFolderFiles({ syncRemote: false });
+  const imported = [...discordDrive.imported, ...localMirror.imported, ...watchedFolder.imported];
 
   if (imported.length > 0 && options.syncRemote !== false) {
     await syncRemoteIndexState();
@@ -293,6 +440,7 @@ async function importExternalLibraryFiles(options: { syncRemote?: boolean } = {}
     imported,
     discordDrive,
     localMirror,
+    watchedFolder,
   };
 }
 
@@ -544,6 +692,7 @@ router.get("/diagnostics", async (request, response, next) => {
       config: {
         language: config.language,
         localMirrorEnabled: config.localMirrorEnabled,
+        watchedFolderEnabled: config.watchedFolderEnabled,
         galleryDisplayMode: config.galleryDisplayMode,
         thumbnailZoomPercent: config.thumbnailZoomPercent,
       },
@@ -993,7 +1142,11 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
     }
 
     const uploadedRecords = await uploadFilesToDiscordDrive(files, activeStorage);
-    const uploaded = addUploadedFiles(uploadedRecords, albumId);
+    const uploadedRecordsWithHashes = uploadedRecords.map((record, index) => ({
+      ...record,
+      contentHash: files[index] ? hashBuffer(files[index].buffer) : undefined,
+    }));
+    const uploaded = addUploadedFiles(uploadedRecordsWithHashes, albumId);
     cacheUploadedFilesForLocalAccess(uploaded, files);
     await syncRemoteLibraryState();
     response.status(201).json({ uploaded });
@@ -1004,43 +1157,46 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
 
 router.post("/upload-local", async (request, response, next) => {
   try {
-    const files = await readLocalSourceFiles(request.body.filePaths);
     const albumId = typeof request.body.albumId === "string" && request.body.albumId.length > 0 ? request.body.albumId : undefined;
-    const clientUploadIds = readClientUploadIds(request.body.clientUploadIds, files.length);
+    const rawFilePaths = Array.isArray(request.body.filePaths) ? request.body.filePaths : [];
+    const clientUploadIds = readClientUploadIds(request.body.clientUploadIds, rawFilePaths.length);
+    const batches = await readLocalUploadBatches(rawFilePaths, { albumId, clientUploadIds });
+    const fileCount = batches.reduce((count, batch) => count + batch.files.length, 0);
 
-    if (!files.length) {
+    if (!fileCount) {
       response.status(400).json({ error: "At least one readable local file is required" });
       return;
     }
 
-    const records = env.mockMode
-      ? files.map((file) => ({
-          fileName: file.fileName,
-          fileSize: file.fileSize,
-          mimeType: file.mimeType,
-          guildId: getActiveStorageContext()?.guildId ?? "mock_active_guild",
-          attachmentUrl: `mock://uploads/${encodeURIComponent(file.fileName)}`,
-          uploadedAt: file.modifiedAt,
-        }))
-      : await uploadLocalFilesToDiscordDrive(
-          files,
-          (() => {
-            const activeStorage = getActiveStorageContext();
+    const activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      throw new Error("Apply a Discord server in Settings before uploading files.");
+    }
 
-            if (!activeStorage) {
-              throw new Error("Apply a Discord server in Settings before uploading files.");
-            }
+    const uploaded: LibraryItem[] = [];
+    for (const batch of batches) {
+      const targetAlbumId = batch.albumName ? addAlbum(batch.albumName).id : batch.albumId;
+      const records = env.mockMode
+        ? batch.files.map((file) => ({
+            fileName: file.fileName,
+            fileSize: file.fileSize,
+            mimeType: file.mimeType,
+            guildId: activeStorage?.guildId ?? "mock_active_guild",
+            attachmentUrl: `mock://uploads/${encodeURIComponent(file.fileName)}`,
+            uploadedAt: file.modifiedAt,
+            contentHash: file.contentHash,
+          }))
+        : await uploadLocalFilesToDiscordDrive(batch.files, activeStorage!);
+      const recordsWithLocalMetadata = records.map((record, index) => ({
+        ...record,
+        itemId: batch.clientUploadIds?.[index],
+        contentHash: batch.files[index]?.contentHash,
+      }));
+      const uploadedBatch = addUploadedFiles(recordsWithLocalMetadata, targetAlbumId);
+      cacheUploadedLocalFilesForLocalAccess(uploadedBatch, batch.files);
+      uploaded.push(...uploadedBatch);
+    }
 
-            return activeStorage;
-          })(),
-        );
-
-    const recordsWithClientIds = records.map((record, index) => ({
-      ...record,
-      itemId: clientUploadIds[index],
-    }));
-    const uploaded = addUploadedFiles(recordsWithClientIds, albumId);
-    cacheUploadedLocalFilesForLocalAccess(uploaded, files);
     await syncRemoteLibraryState();
     response.status(201).json({ uploaded });
   } catch (error) {

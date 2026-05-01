@@ -9,6 +9,7 @@ import {
   DISCASA_DEFAULT_CONFIG,
   type AlbumRecord,
   type DiscasaConfig,
+  type DiscasaWatchedFolderImportResult,
   type FolderMembership,
   type FolderNode,
   type LibraryItem,
@@ -52,6 +53,9 @@ export type LocalSourceFile = {
   mimeType: string;
   fileSize: number;
   modifiedAt: string;
+  contentHash?: string;
+  sourceCollection?: "watched";
+  sourceFingerprint?: string;
 };
 
 export type UploadedFileRecord = {
@@ -65,20 +69,26 @@ export type UploadedFileRecord = {
   storageChannelId?: string;
   storageMessageId?: string;
   storageManifest?: LibraryItemStorageManifest | null;
+  contentHash?: string;
+  sourceCollection?: "watched";
+  sourceFingerprint?: string;
 };
 
-export type LocalMirrorImportCandidate = {
-  filePath: string;
-  fileName: string;
-  fileSize: number;
-  mimeType: string;
-  modifiedAt: string;
-};
+export type LocalMirrorImportCandidate = LocalSourceFile;
 
 export type LocalMirrorImportScan = {
   candidates: LocalMirrorImportCandidate[];
   scannedFileCount: number;
   skippedFileCount: number;
+};
+
+export type WatchedFolderImportCandidate = LocalSourceFile & {
+  sourceCollection: "watched";
+  sourceFingerprint: string;
+};
+
+export type WatchedFolderImportScan = Omit<DiscasaWatchedFolderImportResult, "imported"> & {
+  candidates: WatchedFolderImportCandidate[];
 };
 
 type LegacyPersistedAlbum = {
@@ -412,6 +422,15 @@ function normalizeLocalMirrorPath(raw: unknown): string | null {
     : resolved;
 }
 
+function normalizeOptionalFolderPath(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? path.resolve(trimmed) : null;
+}
+
 function normalizeLanguage(raw: unknown): DiscasaConfig["language"] {
   return raw === "pt" ? "pt" : "en";
 }
@@ -442,6 +461,9 @@ function normalizeDiscasaConfig(raw: unknown): DiscasaConfig {
     localMirrorEnabled:
       typeof entry.localMirrorEnabled === "boolean" ? entry.localMirrorEnabled : fallback.localMirrorEnabled,
     localMirrorPath: normalizeLocalMirrorPath(entry.localMirrorPath),
+    watchedFolderEnabled:
+      typeof entry.watchedFolderEnabled === "boolean" ? entry.watchedFolderEnabled : fallback.watchedFolderEnabled,
+    watchedFolderPath: normalizeOptionalFolderPath(entry.watchedFolderPath),
     language: normalizeLanguage(entry.language),
   };
 }
@@ -695,6 +717,10 @@ function normalizeLibraryItemIndex(raw: unknown): PersistedItem | null {
     storageManifest: normalizeStorageManifest(entry.storageManifest),
     originalSource: normalizeOriginalSource(entry.originalSource),
     savedMediaEdit: normalizeSavedMediaEdit(entry.savedMediaEdit),
+    contentHash: typeof entry.contentHash === "string" && entry.contentHash.length > 0 ? entry.contentHash : undefined,
+    sourceCollection: entry.sourceCollection === "watched" ? "watched" : undefined,
+    sourceFingerprint:
+      typeof entry.sourceFingerprint === "string" && entry.sourceFingerprint.length > 0 ? entry.sourceFingerprint : undefined,
   };
 }
 
@@ -739,6 +765,10 @@ function normalizeLegacyHydratedLibraryItem(raw: unknown): LibraryItem | null {
     storageManifest: normalizeStorageManifest(entry.storageManifest),
     originalSource: normalizeOriginalSource(entry.originalSource),
     savedMediaEdit: normalizeSavedMediaEdit(entry.savedMediaEdit),
+    contentHash: typeof entry.contentHash === "string" && entry.contentHash.length > 0 ? entry.contentHash : undefined,
+    sourceCollection: entry.sourceCollection === "watched" ? "watched" : undefined,
+    sourceFingerprint:
+      typeof entry.sourceFingerprint === "string" && entry.sourceFingerprint.length > 0 ? entry.sourceFingerprint : undefined,
   };
 }
 
@@ -1031,6 +1061,14 @@ function hashBuffer(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function hashFileIfReadable(filePath: string): string | undefined {
+  try {
+    return hashBuffer(fs.readFileSync(filePath));
+  } catch {
+    return undefined;
+  }
+}
+
 function findPersistedItem(itemId: string): PersistedItem | null {
   return database.items.find((item) => item.id === itemId) ?? null;
 }
@@ -1233,10 +1271,99 @@ export function scanLocalMirrorImportCandidates(): LocalMirrorImportScan {
         fileSize: stat.size,
         mimeType: inferMimeTypeFromFileName(entry.name),
         modifiedAt: stat.mtime.toISOString(),
+        contentHash: hashFileIfReadable(filePath),
       });
     }
   } catch (error) {
     logger.warn("[Discasa local mirror] Could not scan the local mirror folder for imported files.", error);
+  }
+
+  return {
+    candidates,
+    scannedFileCount,
+    skippedFileCount,
+  };
+}
+
+function createWatchedFolderFingerprint(filePath: string, stat: Stats): string {
+  const watchedRoot = database.config.watchedFolderPath;
+  const relativePath = watchedRoot ? path.relative(watchedRoot, filePath) : path.basename(filePath);
+  const normalizedRelativePath = relativePath.split(path.sep).join("/").trim().toLowerCase();
+  return [
+    normalizedRelativePath || path.basename(filePath).toLowerCase(),
+    stat.size,
+    Math.floor(stat.mtimeMs),
+  ].join(":");
+}
+
+export function scanWatchedFolderImportCandidates(): WatchedFolderImportScan {
+  const watchedPath = database.config.watchedFolderPath;
+  if (!database.config.watchedFolderEnabled || !watchedPath || !hasDirectory(watchedPath)) {
+    return {
+      candidates: [],
+      scannedFileCount: 0,
+      skippedFileCount: 0,
+    };
+  }
+
+  const knownFingerprints = new Set(
+    database.items
+      .filter((item) => item.sourceCollection === "watched" && item.sourceFingerprint)
+      .map((item) => item.sourceFingerprint as string),
+  );
+  const candidates: WatchedFolderImportCandidate[] = [];
+  let scannedFileCount = 0;
+  let skippedFileCount = 0;
+
+  try {
+    const entries = fs.readdirSync(watchedPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const filePath = path.join(watchedPath, entry.name);
+      scannedFileCount += 1;
+
+      if (isTemporaryLocalMirrorFile(entry.name)) {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      let stat: Stats;
+      try {
+        stat = fs.statSync(filePath);
+      } catch {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      const sourceFingerprint = createWatchedFolderFingerprint(filePath, stat);
+      if (
+        knownFingerprints.has(sourceFingerprint) ||
+        !stat.isFile() ||
+        stat.size <= 0 ||
+        Date.now() - stat.mtimeMs < LOCAL_MIRROR_IMPORT_STABLE_MS
+      ) {
+        skippedFileCount += 1;
+        continue;
+      }
+
+      candidates.push({
+        filePath,
+        fileName: entry.name,
+        fileSize: stat.size,
+        mimeType: inferMimeTypeFromFileName(entry.name),
+        modifiedAt: stat.mtime.toISOString(),
+        contentHash: hashFileIfReadable(filePath),
+        sourceCollection: "watched",
+        sourceFingerprint,
+      });
+      knownFingerprints.add(sourceFingerprint);
+    }
+  } catch (error) {
+    logger.warn("[Discasa watched folder] Could not scan the watched folder for new files.", error);
   }
 
   return {
@@ -1398,6 +1525,9 @@ function createStoredLibraryItem(file: UploadedFileRecord): PersistedItem {
     storageChannelId: file.storageChannelId,
     storageMessageId: file.storageMessageId,
     storageManifest: file.storageManifest ?? null,
+    contentHash: file.contentHash,
+    sourceCollection: file.sourceCollection,
+    sourceFingerprint: file.sourceFingerprint,
   };
 }
 
@@ -1660,6 +1790,7 @@ export function getLocalStorageStatus(): LocalStorageStatus {
   const thumbnailStats = countFilesInDirectory(thumbnailCacheDir);
   const mirroredFileCount = database.items.filter((item) => hasReadableFile(getLocalMirrorFilePath(item, mirrorRoot))).length;
   const localMirrorPathExists = hasDirectory(mirrorRoot);
+  const watchedFolderPath = database.config.watchedFolderPath;
 
   return {
     localMirrorEnabled: database.config.localMirrorEnabled,
@@ -1672,6 +1803,9 @@ export function getLocalStorageStatus(): LocalStorageStatus {
     thumbnailCachePath: thumbnailCacheDir,
     thumbnailCacheFileCount: thumbnailStats.count,
     thumbnailCacheBytes: thumbnailStats.bytes,
+    watchedFolderEnabled: database.config.watchedFolderEnabled,
+    watchedFolderPath,
+    watchedFolderPathExists: Boolean(watchedFolderPath && hasDirectory(watchedFolderPath)),
   };
 }
 
@@ -1819,6 +1953,7 @@ export function addMockFiles(files: Express.Multer.File[], albumId?: string): Li
       mimeType: file.mimetype || "application/octet-stream",
       guildId: database.activeStorage?.guildId ?? "mock_active_guild",
       attachmentUrl: `mock://uploads/${encodeURIComponent(file.originalname)}`,
+      contentHash: hashBuffer(file.buffer),
     }),
   );
 

@@ -2,6 +2,19 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-library-automation]
+
+### Added
+
+- Added folder uploads that create albums named after selected folders.
+- Added watched-folder settings and automatic imports into the `Watched` collection.
+- Added duplicate detection with a conditional `Duplicados` collection.
+- Added content hashes and source metadata to library items for duplicate and watched-folder workflows.
+
+### Changed
+
+- Moving files between albums now removes previous album memberships and keeps files only in the destination album.
+
 ## [2026-05-01-license]
 
 ### Added

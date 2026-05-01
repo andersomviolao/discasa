@@ -1422,6 +1422,7 @@ type GalleryProps = {
   onClearSelection: () => void;
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
   onRequestUpload: () => void;
+  onRequestFolderUpload: () => void;
   onDragEnter: (event: DragEvent<HTMLElement>) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   onDragOver: (event: DragEvent<HTMLElement>) => void;
@@ -1453,6 +1454,7 @@ type LibraryToolbarProps = {
   onThumbnailZoomIndexChange: (nextIndex: number) => void;
   onToggleGalleryDisplayMode: () => void;
   onRequestUpload: () => void;
+  onRequestFolderUpload: () => void;
 };
 
 type SelectionBox = {
@@ -1506,6 +1508,7 @@ type GalleryGridProps = {
   onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
   onCancelInternalItemDrag: () => void;
   onRequestUpload: () => void;
+  onRequestFolderUpload: () => void;
 };
 
 type GalleryItemProps = {
@@ -1774,6 +1777,7 @@ function LibraryToolbar({
   onThumbnailZoomIndexChange,
   onToggleGalleryDisplayMode,
   onRequestUpload,
+  onRequestFolderUpload,
 }: LibraryToolbarProps) {
   function handleThumbnailZoomChange(event: ChangeEvent<HTMLInputElement>): void {
     onThumbnailZoomIndexChange(Number(event.currentTarget.value));
@@ -1816,6 +1820,16 @@ function LibraryToolbar({
 
         <button type="button" className="icon-circle-button upload-button" onClick={onRequestUpload} aria-label="Upload" title="Upload">
           <UploadIcon />
+        </button>
+
+        <button
+          type="button"
+          className="icon-circle-button upload-button"
+          onClick={onRequestFolderUpload}
+          aria-label="Upload folder"
+          title="Upload folder"
+        >
+          <FolderIcon />
         </button>
 
         {bulkActions}
@@ -1989,6 +2003,7 @@ function GalleryGrid({
   onCompleteInternalItemDrag,
   onCancelInternalItemDrag,
   onRequestUpload,
+  onRequestFolderUpload: _onRequestFolderUpload,
 }: GalleryGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null);
   const itemElementMapRef = useRef(new Map<string, HTMLElement>());
@@ -2363,6 +2378,7 @@ export function Gallery({
   onClearSelection,
   onApplySelectionRect,
   onRequestUpload,
+  onRequestFolderUpload,
   onDragEnter,
   onDragLeave,
   onDragOver,
@@ -2752,6 +2768,7 @@ export function Gallery({
           onThumbnailZoomIndexChange={onThumbnailZoomIndexChange}
           onToggleGalleryDisplayMode={onToggleGalleryDisplayMode}
           onRequestUpload={onRequestUpload}
+          onRequestFolderUpload={onRequestFolderUpload}
         />
       </div>
 
@@ -2773,6 +2790,7 @@ export function Gallery({
         onCompleteInternalItemDrag={onCompleteInternalItemDrag}
         onCancelInternalItemDrag={onCancelInternalItemDrag}
         onRequestUpload={onRequestUpload}
+        onRequestFolderUpload={onRequestFolderUpload}
         renderItemActions={renderThumbnailActions}
       />
 
@@ -3370,6 +3388,8 @@ type SettingsModalProps = {
   language: InterfaceLanguage;
   localMirrorEnabled: boolean;
   localMirrorPath: string;
+  watchedFolderEnabled: boolean;
+  watchedFolderPath: string;
   localStorageStatus: LocalStorageStatus | null;
   diagnostics: AppDiagnostics | null;
   isLoadingDiagnostics: boolean;
@@ -3381,8 +3401,11 @@ type SettingsModalProps = {
   onChangeCloseToTray: (checked: boolean) => void;
   onChangeLocalMirrorEnabled: (checked: boolean) => void;
   onChangeLocalMirrorPath: (value: string) => void;
+  onChangeWatchedFolderEnabled: (checked: boolean) => void;
+  onChangeWatchedFolderPath: (value: string) => void;
   onChangeLanguage: (language: InterfaceLanguage) => void;
   onChooseLocalMirrorFolder: () => void;
+  onChooseWatchedFolder: () => void;
   onRefreshDiagnostics: () => void;
   onCommitAccentColor: (value: string) => void;
 };
@@ -3714,6 +3737,8 @@ export function SettingsModal({
   language,
   localMirrorEnabled,
   localMirrorPath,
+  watchedFolderEnabled,
+  watchedFolderPath,
   localStorageStatus,
   diagnostics,
   isLoadingDiagnostics,
@@ -3725,8 +3750,11 @@ export function SettingsModal({
   onChangeCloseToTray,
   onChangeLocalMirrorEnabled,
   onChangeLocalMirrorPath,
+  onChangeWatchedFolderEnabled,
+  onChangeWatchedFolderPath,
   onChangeLanguage,
   onChooseLocalMirrorFolder,
+  onChooseWatchedFolder,
   onRefreshDiagnostics,
   onCommitAccentColor,
 }: SettingsModalProps) {
@@ -3734,10 +3762,15 @@ export function SettingsModal({
   const [logoutError, setLogoutError] = useState("");
   const [mouseWheelBehavior, setMouseWheelBehavior] = useState(() => readStoredMouseWheelBehavior());
   const [localMirrorPathDraft, setLocalMirrorPathDraft] = useState(localMirrorPath);
+  const [watchedFolderPathDraft, setWatchedFolderPathDraft] = useState(watchedFolderPath);
 
   useEffect(() => {
     setLocalMirrorPathDraft(localMirrorPath);
   }, [localMirrorPath]);
+
+  useEffect(() => {
+    setWatchedFolderPathDraft(watchedFolderPath);
+  }, [watchedFolderPath]);
 
   async function handleLogout(): Promise<void> {
     setIsLoggingOut(true);
@@ -3774,6 +3807,27 @@ export function SettingsModal({
     if (event.key === "Escape") {
       event.preventDefault();
       setLocalMirrorPathDraft(localMirrorPath);
+      event.currentTarget.blur();
+    }
+  }
+
+  function commitWatchedFolderPathDraft(): void {
+    const trimmedPath = watchedFolderPathDraft.trim();
+    setWatchedFolderPathDraft(trimmedPath);
+    onChangeWatchedFolderPath(trimmedPath);
+  }
+
+  function handleWatchedFolderPathKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitWatchedFolderPathDraft();
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setWatchedFolderPathDraft(watchedFolderPath);
       event.currentTarget.blur();
     }
   }
@@ -3848,6 +3902,11 @@ export function SettingsModal({
     const thumbnailCacheLabel = localStorageStatus
       ? `${bytesFormatter.format(localStorageStatus.thumbnailCacheFileCount)} files, ${formatStorageBytes(localStorageStatus.thumbnailCacheBytes)}`
       : "Waiting for cache status";
+    const watchedPathStatus = watchedFolderPath
+      ? localStorageStatus?.watchedFolderPathExists === false
+        ? "Folder not found"
+        : watchedFolderPath
+      : "No folder selected";
 
     return (
       <>
@@ -3912,6 +3971,61 @@ export function SettingsModal({
               </button>
             </div>
             <span className="settings-input-help">Active folder: {resolvedMirrorPath}</span>
+          </div>
+
+          <label className="settings-toggle" htmlFor="watched-folder-enabled">
+            <div className="settings-toggle-copy">
+              <span className="settings-toggle-title">Watch a folder</span>
+              <span className="settings-toggle-description">
+                Import new files that appear in one local folder and show them in Collections.
+              </span>
+            </div>
+            <input
+              id="watched-folder-enabled"
+              className="settings-switch-input"
+              type="checkbox"
+              checked={watchedFolderEnabled}
+              onChange={(event) => onChangeWatchedFolderEnabled(event.currentTarget.checked)}
+            />
+            <span className="settings-switch" aria-hidden="true" />
+          </label>
+
+          <div className="settings-field-stack">
+            <label className="settings-input-label" htmlFor="watched-folder-path">
+              Watched folder
+            </label>
+            <div className="settings-path-row">
+              <input
+                id="watched-folder-path"
+                className="form-text-input settings-path-input"
+                type="text"
+                spellCheck={false}
+                value={watchedFolderPathDraft}
+                placeholder="Choose a screenshots folder"
+                onChange={(event) => setWatchedFolderPathDraft(event.currentTarget.value)}
+                onBlur={commitWatchedFolderPathDraft}
+                onKeyDown={handleWatchedFolderPathKeyDown}
+              />
+              <button
+                type="button"
+                className="pill-button secondary-button settings-path-button"
+                onClick={onChooseWatchedFolder}
+                disabled={isChoosingMirrorFolder}
+              >
+                {isChoosingMirrorFolder ? "Choosing..." : "Choose"}
+              </button>
+              <button
+                type="button"
+                className="pill-button secondary-button settings-path-button"
+                onClick={() => {
+                  setWatchedFolderPathDraft("");
+                  onChangeWatchedFolderPath("");
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            <span className="settings-input-help">Active folder: {watchedPathStatus}</span>
           </div>
 
           <div className="settings-storage-grid" aria-label="Local storage status">
@@ -4191,6 +4305,8 @@ const collectionEntries = [
   { id: "pictures", label: "Pictures", icon: PictureIcon },
   { id: "videos", label: "Videos", icon: VideoIcon },
   { id: "others", label: "Others", icon: FolderIcon },
+  { id: "watched", label: "Watched", icon: FolderIcon },
+  { id: "duplicates", label: "Duplicados", icon: FolderStackIcon },
 ] as const;
 
 type SidebarProps = {
@@ -4202,6 +4318,8 @@ type SidebarProps = {
     server: string;
     avatarUrl: string | null;
   };
+  showWatchedCollection: boolean;
+  showDuplicateCollection: boolean;
   onToggleSidebar: () => void;
   onOpenView: (view: SidebarView) => void;
   onOpenCreateAlbum: () => void;
@@ -4218,6 +4336,8 @@ export function Sidebar({
   selectedView,
   isSidebarCollapsed,
   profile,
+  showWatchedCollection,
+  showDuplicateCollection,
   onToggleSidebar,
   onOpenView,
   onOpenCreateAlbum,
@@ -4228,6 +4348,18 @@ export function Sidebar({
   onAlbumDragOver,
   onAlbumDrop,
 }: SidebarProps) {
+  const visibleCollectionEntries = collectionEntries.filter((entry) => {
+    if (entry.id === "watched") {
+      return showWatchedCollection;
+    }
+
+    if (entry.id === "duplicates") {
+      return showDuplicateCollection;
+    }
+
+    return true;
+  });
+
   return (
     <aside className={`sidebar-panel panel-surface ${isSidebarCollapsed ? "collapsed" : ""}`}>
       <div className="sidebar-topbar">
@@ -4263,7 +4395,7 @@ export function Sidebar({
         <section className="sidebar-section">
           {!isSidebarCollapsed ? <h2 className="sidebar-section-title">Collections</h2> : null}
 
-          {collectionEntries.map(({ id, label, icon: Icon }) => (
+          {visibleCollectionEntries.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               type="button"

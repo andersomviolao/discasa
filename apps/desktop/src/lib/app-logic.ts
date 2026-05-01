@@ -88,6 +88,7 @@ export type AppDiagnostics = {
   config: {
     language: DiscasaConfig["language"];
     localMirrorEnabled: boolean;
+    watchedFolderEnabled: boolean;
     galleryDisplayMode: GalleryDisplayMode;
     thumbnailZoomPercent: number;
   };
@@ -103,7 +104,7 @@ export type SettingsSection = "discord" | "appearance" | "storage" | "language" 
 export type WindowState = "default" | "maximized";
 
 export type FixedLibraryViewId = "all-files" | "favorites" | "trash";
-export type FixedCollectionViewId = "pictures" | "videos" | "others";
+export type FixedCollectionViewId = "pictures" | "videos" | "others" | "watched" | "duplicates";
 
 export type SidebarView =
   | { kind: "library"; id: FixedLibraryViewId }
@@ -355,6 +356,38 @@ export function isOther(item: LibraryItem): boolean {
   return !isImage(item) && !isVideo(item);
 }
 
+function getDuplicateComparisonKey(item: LibraryItem): string | null {
+  if (item.isTrashed) {
+    return null;
+  }
+
+  const contentHash = item.storageManifest?.sha256 ?? item.contentHash;
+  if (contentHash) {
+    return `hash:${contentHash}`;
+  }
+
+  return `metadata:${item.size}:${item.mimeType}:${item.name.trim().toLowerCase()}`;
+}
+
+export function getDuplicateLibraryItemIds(items: LibraryItem[]): string[] {
+  const groups = new Map<string, LibraryItem[]>();
+
+  for (const item of items) {
+    const key = getDuplicateComparisonKey(item);
+    if (!key) {
+      continue;
+    }
+
+    const group = groups.get(key) ?? [];
+    group.push(item);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.values())
+    .filter((group) => group.length > 1)
+    .flatMap((group) => group.map((item) => item.id));
+}
+
 export function getLibraryItemContentUrl(item: LibraryItem): string {
   return item.contentUrl ?? item.attachmentUrl;
 }
@@ -392,7 +425,11 @@ export function getLibraryItemThumbnailUrl(item: LibraryItem): string {
   return item.thumbnailUrl ?? getLibraryItemContentUrl(item);
 }
 
-export function getVisibleItems(items: LibraryItem[], selectedView: SidebarView): LibraryItem[] {
+export function getVisibleItems(
+  items: LibraryItem[],
+  selectedView: SidebarView,
+  duplicateItemIds: string[] = [],
+): LibraryItem[] {
   switch (selectedView.kind) {
     case "library":
       if (selectedView.id === "all-files") {
@@ -413,6 +450,15 @@ export function getVisibleItems(items: LibraryItem[], selectedView: SidebarView)
         return items.filter((item) => !item.isTrashed && isVideo(item));
       }
 
+      if (selectedView.id === "watched") {
+        return items.filter((item) => !item.isTrashed && item.sourceCollection === "watched");
+      }
+
+      if (selectedView.id === "duplicates") {
+        const itemsById = new Map(items.filter((item) => !item.isTrashed).map((item) => [item.id, item]));
+        return duplicateItemIds.map((itemId) => itemsById.get(itemId)).filter((item): item is LibraryItem => Boolean(item));
+      }
+
       return items.filter((item) => !item.isTrashed && isOther(item));
     case "album":
       return items.filter((item) => !item.isTrashed && item.albumIds.includes(selectedView.id));
@@ -430,6 +476,8 @@ export function getCurrentTitle(selectedView: SidebarView, albums: AlbumRecord[]
     case "collection":
       if (selectedView.id === "pictures") return "Pictures";
       if (selectedView.id === "videos") return "Videos";
+      if (selectedView.id === "watched") return "Watched";
+      if (selectedView.id === "duplicates") return "Duplicados";
       return "Others";
     case "album":
       return albums.find((album) => album.id === selectedView.id)?.name ?? "Album";
@@ -447,6 +495,8 @@ export function getCurrentDescription(selectedView: SidebarView): string {
     case "collection":
       if (selectedView.id === "pictures") return "Image files only.";
       if (selectedView.id === "videos") return "Video files only.";
+      if (selectedView.id === "watched") return "Files imported automatically from the watched folder.";
+      if (selectedView.id === "duplicates") return "Files that Discasa detected as duplicate pairs.";
       return "Files that are neither images nor videos.";
     case "album":
       return "Files linked to this album.";
@@ -660,6 +710,22 @@ export async function chooseLocalMirrorFolder(): Promise<string | null> {
   }
 
   const fallbackPath = window.prompt("Folder path for local mirrored files");
+  return fallbackPath && fallbackPath.trim().length > 0 ? fallbackPath.trim() : null;
+}
+
+export async function chooseWatchedFolder(): Promise<string | null> {
+  if (isTauriRuntime()) {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selectedPath = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose watched folder",
+    });
+
+    return typeof selectedPath === "string" ? selectedPath : null;
+  }
+
+  const fallbackPath = window.prompt("Folder path to watch");
   return fallbackPath && fallbackPath.trim().length > 0 ? fallbackPath.trim() : null;
 }
 

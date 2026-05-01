@@ -40,6 +40,9 @@ Discasa
 - Recovery for interrupted local-path uploads.
 - Snapshot creation, hydration, recovery, and URL relinking.
 - Automatic import from `discasa-drive` and optional local mirror folders.
+- Automatic import from a user-selected watched folder.
+- Folder upload expansion into generated albums.
+- Duplicate-file grouping for the `Duplicados` collection.
 - Local file and thumbnail cache.
 - Runtime language switching between English and Portuguese.
 - App and bot diagnostics in Settings.
@@ -71,7 +74,7 @@ Discasa
 
 ## 6. Upload Flow
 
-1. The user selects or drops files.
+1. The user selects or drops files or folders.
 2. Tauri sends native local paths to `/api/upload-local`.
 3. The UI creates pending items immediately.
 4. The user can favorite, move, or trash pending items while upload continues.
@@ -80,9 +83,25 @@ Discasa
 7. The app reconciles the final item with the pending id.
 8. Snapshots and caches are updated.
 
+When a local path is a directory, the backend recursively reads its files, creates an album named after the selected folder, and stores the uploaded files in that album.
+
 Pending upload records are stored outside the normal library cache so interrupted previews cannot become permanent ghost files.
 
-## 7. Localization
+## 7. Watched Folders
+
+The storage settings can enable a watched folder path. When enabled, the existing external import loop scans the folder periodically and imports new stable top-level files. The scanner skips temporary or still-changing files, remembers imported source fingerprints, and marks imported items with watched-folder metadata.
+
+The `Watched` collection is visible while the watched-folder option is active.
+
+## 8. Duplicate Detection
+
+The desktop periodically groups duplicate library items without scanning too aggressively. Exact content hashes are preferred when available, with metadata fallback for older items that do not have a stored hash. The `Duplicados` collection appears only when at least one duplicate group exists, and duplicate items are shown next to their matching pair or group.
+
+## 9. Album Moves
+
+Moving or dragging a file into an album now uses exclusive membership. The item is removed from previous album memberships and kept only in the destination album.
+
+## 10. Localization
 
 Runtime translation files live in:
 
@@ -95,7 +114,7 @@ apps/desktop/src/i18n
 
 Language is stored in `DiscasaConfig.language`. Changing the setting applies immediately without restarting the app.
 
-## 8. Development
+## 11. Development
 
 Install:
 
@@ -124,7 +143,7 @@ npm run build:desktop
 npm run build:server
 ```
 
-## 9. Local Data
+## 12. Local Data
 
 On Windows, Discasa uses:
 
@@ -140,7 +159,7 @@ Legacy Tauri paths may also exist under:
 %LOCALAPPDATA%\com.andersomviolao.discasa
 ```
 
-## 10. Maintenance Guidelines
+## 13. Maintenance Guidelines
 
 - Keep the app repository responsible for user-facing behavior and state decisions.
 - Keep the bot repository small and suitable for online hosting.
@@ -149,6 +168,6 @@ Legacy Tauri paths may also exist under:
 - Keep translations in sync when interface text changes.
 - Validate desktop and server checks before pushing.
 
-## 11. License
+## 14. License
 
 Discasa is distributed under the MIT License. See `LICENSE` for the full text.

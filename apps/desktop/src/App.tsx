@@ -45,7 +45,6 @@ import {
 } from "./i18n";
 import {
   logoutDiscord,
-  addLibraryItemsToAlbum,
   createAlbum,
   deleteAlbum,
   deleteLibraryItem,
@@ -73,6 +72,7 @@ import {
   uploadFiles,
   uploadLocalFilePaths,
   chooseLocalMirrorFolder,
+  chooseWatchedFolder,
   downloadLibraryItems,
   DEFAULT_PROFILE,
   getCurrentDescription,
@@ -80,6 +80,7 @@ import {
   getLibraryItemContentUrl,
   getLibraryItemThumbnailUrl,
   getVisibleItems,
+  getDuplicateLibraryItemIds,
   clampNumber,
   hexToHsv,
   hexToRgbChannels,
@@ -208,6 +209,7 @@ const DEFAULT_THUMBNAIL_ZOOM_PERCENT = DISCASA_DEFAULT_CONFIG.thumbnailZoomPerce
 const DEFAULT_GALLERY_DISPLAY_MODE = DISCASA_DEFAULT_CONFIG.galleryDisplayMode;
 const CONFIG_SAVE_DEBOUNCE_MS = 700;
 const DRIVE_IMPORT_INTERVAL_MS = 30000;
+const DUPLICATE_SCAN_INTERVAL_MS = 300000;
 const DISCASA_LIBRARY_ITEM_DRAG_MIME = "application/x-discasa-library-items";
 const DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX = "discasa-library-items:";
 const AUTH_APPLY_PROGRESS_STEP_MS = 1700;
@@ -567,9 +569,12 @@ export function App() {
   const [language, setLanguage] = useState<InterfaceLanguage>(() => readStoredLanguage(DISCASA_DEFAULT_CONFIG.language));
   const [localMirrorEnabled, setLocalMirrorEnabled] = useState(DISCASA_DEFAULT_CONFIG.localMirrorEnabled);
   const [localMirrorPath, setLocalMirrorPath] = useState<string>(DISCASA_DEFAULT_CONFIG.localMirrorPath ?? "");
+  const [watchedFolderEnabled, setWatchedFolderEnabled] = useState(DISCASA_DEFAULT_CONFIG.watchedFolderEnabled);
+  const [watchedFolderPath, setWatchedFolderPath] = useState<string>(DISCASA_DEFAULT_CONFIG.watchedFolderPath ?? "");
   const [mediaPreviewVolume, setMediaPreviewVolume] = useState(DISCASA_DEFAULT_CONFIG.mediaPreviewVolume);
   const [localStorageStatus, setLocalStorageStatus] = useState<LocalStorageStatus | null>(null);
   const [isChoosingMirrorFolder, setIsChoosingMirrorFolder] = useState(false);
+  const [duplicateItemIds, setDuplicateItemIds] = useState<string[]>([]);
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingAlbum, setIsDeletingAlbum] = useState(false);
   const [deleteAlbumError, setDeleteAlbumError] = useState("");
@@ -595,6 +600,7 @@ export function App() {
   const createAlbumInputRef = useRef<HTMLInputElement | null>(null);
   const renameAlbumInputRef = useRef<HTMLInputElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
   const itemsRef = useRef<LibraryItem[]>(initialCachedLibrary?.items ?? []);
   const albumsRef = useRef<AlbumRecord[]>([]);
   const selectedViewRef = useRef<SidebarView>(selectedView);
@@ -664,8 +670,34 @@ export function App() {
   }, [items]);
 
   useEffect(() => {
+    setDuplicateItemIds(getDuplicateLibraryItemIds(items));
+  }, [items]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setDuplicateItemIds(getDuplicateLibraryItemIds(itemsRef.current));
+    }, DUPLICATE_SCAN_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     selectedViewRef.current = selectedView;
   }, [selectedView]);
+
+  useEffect(() => {
+    if (selectedView.kind !== "collection") {
+      return;
+    }
+
+    if (selectedView.id === "watched" && !watchedFolderEnabled) {
+      setSelectedView({ kind: "library", id: "all-files" });
+    }
+
+    if (selectedView.id === "duplicates" && duplicateItemIds.length === 0) {
+      setSelectedView({ kind: "library", id: "all-files" });
+    }
+  }, [duplicateItemIds.length, selectedView, watchedFolderEnabled]);
 
   useEffect(() => {
     activeGuildIdRef.current = activeGuildId;
@@ -1025,6 +1057,8 @@ export function App() {
     setMediaPreviewVolume(clampNumber(nextConfig.mediaPreviewVolume, 0, 1));
     setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
     setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
+    setWatchedFolderEnabled(nextConfig.watchedFolderEnabled);
+    setWatchedFolderPath(nextConfig.watchedFolderPath ?? "");
     setLanguage(nextConfig.language);
   }
 
@@ -1270,7 +1304,10 @@ export function App() {
   );
 
   const deferredItems = useDeferredValue(items);
-  const visibleItems = useMemo(() => getVisibleItems(deferredItems, selectedView), [deferredItems, selectedView]);
+  const visibleItems = useMemo(
+    () => getVisibleItems(deferredItems, selectedView, duplicateItemIds),
+    [deferredItems, duplicateItemIds, selectedView],
+  );
   const visibleItemIds = useMemo(() => visibleItems.map((item) => item.id), [visibleItems]);
   const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
   const currentDescription = useMemo(() => getCurrentDescription(selectedView), [selectedView]);
@@ -1452,7 +1489,7 @@ export function App() {
 
     if (persistedItemIds.length === 0) {
       const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the album";
-      setMessage(`${uniqueItemIds.length} file(s) added to ${targetAlbumName}.`);
+      setMessage(`${uniqueItemIds.length} file(s) moved to ${targetAlbumName}.`);
       draggingLibraryItemIdsRef.current = [];
       setDraggingLibraryItemIds([]);
       setSidebarDropAlbumId(null);
@@ -1463,16 +1500,16 @@ export function App() {
     setIsBusy(true);
 
     try {
-      const result = await addLibraryItemsToAlbum(albumId, persistedItemIds);
+      const result = await moveLibraryItemsToAlbum(albumId, persistedItemIds);
       const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
       const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the album";
 
       albumsRef.current = result.albums;
       setAlbums(result.albums);
       setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
-      setMessage(`${uniqueItemIds.length} file(s) added to ${targetAlbumName}.`);
+      setMessage(`${uniqueItemIds.length} file(s) moved to ${targetAlbumName}.`);
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "Could not add the files to the album.");
+      setError(caughtError instanceof Error ? caughtError.message : "Could not move the files to the album.");
     } finally {
       setIsBusy(false);
       draggingLibraryItemIdsRef.current = [];
@@ -1583,6 +1620,27 @@ export function App() {
     }
 
     uploadInputRef.current?.click();
+  }
+
+  async function requestFolderUpload(): Promise<void> {
+    if (isTauriRuntime()) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        directory: true,
+        recursive: true,
+        title: "Choose folder to upload",
+      });
+      const folderPaths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+
+      if (folderPaths.length > 0) {
+        await handleNativeFileDrop(folderPaths);
+      }
+
+      return;
+    }
+
+    folderUploadInputRef.current?.click();
   }
 
   function openDeleteAlbumModal(albumId: string, albumName: string): void {
@@ -2108,6 +2166,58 @@ export function App() {
     }
   }
 
+  async function commitUploadedFolderFiles(files: File[]): Promise<void> {
+    const groups = new Map<string, File[]>();
+
+    for (const file of files) {
+      const relativePath = file.webkitRelativePath || file.name;
+      const folderName = relativePath.split(/[\\/]/).filter(Boolean)[0] ?? "Folder";
+      const current = groups.get(folderName) ?? [];
+      current.push(file);
+      groups.set(folderName, current);
+    }
+
+    if (groups.size === 0) {
+      return;
+    }
+
+    let uploadedCount = 0;
+    for (const [folderName, groupFiles] of groups.entries()) {
+      const created = await createAlbum({ name: folderName });
+      const targetAlbumId = created.id;
+      const pendingItems = groupFiles.map((file) => {
+        const mimeType = file.type || inferMimeTypeFromName(file.name);
+        const previewObjectUrl = canUseInstantPreview(mimeType) ? URL.createObjectURL(file) : undefined;
+        return createPendingUploadItem({
+          name: file.name,
+          size: file.size,
+          mimeType,
+          targetAlbumId,
+          previewUrl: previewObjectUrl,
+          previewObjectUrl,
+        });
+      });
+
+      addPendingUploadItems(pendingItems);
+      try {
+        const result = await uploadFiles(groupFiles, targetAlbumId);
+        uploadedCount += result.uploaded.length;
+        await finalizePendingUploadItems(pendingItems, result.uploaded, targetAlbumId);
+      } catch (caughtError) {
+        removeFailedPendingUploadItems(pendingItems);
+        throw caughtError;
+      }
+    }
+
+    if (uploadedCount > 0) {
+      const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
+      albumsRef.current = nextAlbums;
+      setItems(nextItems);
+      setAlbums(nextAlbums);
+      setMessage(`${uploadedCount} file(s) added from folder upload.`);
+    }
+  }
+
   async function commitUploadedLocalPaths(filePaths: string[], albumId?: string): Promise<void> {
     const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
     const pendingItems = filePaths.map((filePath) => {
@@ -2149,6 +2259,18 @@ export function App() {
       await commitUploadedFiles(Array.from(fileList), albumId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
+    }
+  }
+
+  async function handleFolderFiles(fileList: FileList | File[] | null): Promise<void> {
+    if (!fileList || fileList.length === 0) return;
+
+    setError("");
+
+    try {
+      await commitUploadedFolderFiles(Array.from(fileList));
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to add folder.");
     }
   }
 
@@ -2506,6 +2628,16 @@ export function App() {
     void persistConfigPatch({ localMirrorPath: nextValue.trim().length > 0 ? nextValue : null });
   }
 
+  function handleChangeWatchedFolderEnabled(nextValue: boolean): void {
+    setWatchedFolderEnabled(nextValue);
+    void persistConfigPatch({ watchedFolderEnabled: nextValue });
+  }
+
+  function handleChangeWatchedFolderPath(nextValue: string): void {
+    setWatchedFolderPath(nextValue);
+    void persistConfigPatch({ watchedFolderPath: nextValue.trim().length > 0 ? nextValue : null });
+  }
+
   async function handleChooseLocalMirrorFolder(): Promise<void> {
     setIsChoosingMirrorFolder(true);
 
@@ -2519,6 +2651,28 @@ export function App() {
       void persistConfigPatch({ localMirrorPath: selectedPath });
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not choose the local mirror folder.");
+    } finally {
+      setIsChoosingMirrorFolder(false);
+    }
+  }
+
+  async function handleChooseWatchedFolder(): Promise<void> {
+    setIsChoosingMirrorFolder(true);
+
+    try {
+      const selectedPath = await chooseWatchedFolder();
+      if (!selectedPath) {
+        return;
+      }
+
+      setWatchedFolderPath(selectedPath);
+      setWatchedFolderEnabled(true);
+      void persistConfigPatch({
+        watchedFolderEnabled: true,
+        watchedFolderPath: selectedPath,
+      });
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Could not choose the watched folder.");
     } finally {
       setIsChoosingMirrorFolder(false);
     }
@@ -2805,6 +2959,8 @@ export function App() {
             selectedView={selectedView}
             isSidebarCollapsed={isSidebarCollapsed}
             profile={profile}
+            showWatchedCollection={watchedFolderEnabled}
+            showDuplicateCollection={duplicateItemIds.length > 0}
             onToggleSidebar={handleToggleSidebar}
             onOpenView={openLibraryView}
             onOpenCreateAlbum={openCreateAlbumModal}
@@ -2841,6 +2997,9 @@ export function App() {
             onApplySelectionRect={handleApplySelectionRect}
             onRequestUpload={() => {
               void requestUpload();
+            }}
+            onRequestFolderUpload={() => {
+              void requestFolderUpload();
             }}
             onDragEnter={handleFileDragEnter}
             onDragLeave={handleFileDragLeave}
@@ -2887,6 +3046,19 @@ export function App() {
         multiple
         onChange={(event) => {
           void handleFiles(event.currentTarget.files);
+          event.currentTarget.value = "";
+        }}
+      />
+
+      <input
+        ref={folderUploadInputRef}
+        id="discasa-folder-upload-input"
+        className="hidden-upload-input"
+        type="file"
+        multiple
+        {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+        onChange={(event) => {
+          void handleFolderFiles(event.currentTarget.files);
           event.currentTarget.value = "";
         }}
       />
@@ -3030,6 +3202,8 @@ export function App() {
           language={language}
           localMirrorEnabled={localMirrorEnabled}
           localMirrorPath={localMirrorPath}
+          watchedFolderEnabled={watchedFolderEnabled}
+          watchedFolderPath={watchedFolderPath}
           localStorageStatus={localStorageStatus}
           diagnostics={diagnostics}
           isLoadingDiagnostics={isLoadingDiagnostics}
@@ -3041,9 +3215,14 @@ export function App() {
           onChangeCloseToTray={handleChangeCloseToTray}
           onChangeLocalMirrorEnabled={handleChangeLocalMirrorEnabled}
           onChangeLocalMirrorPath={handleChangeLocalMirrorPath}
+          onChangeWatchedFolderEnabled={handleChangeWatchedFolderEnabled}
+          onChangeWatchedFolderPath={handleChangeWatchedFolderPath}
           onChangeLanguage={handleChangeLanguage}
           onChooseLocalMirrorFolder={() => {
             void handleChooseLocalMirrorFolder();
+          }}
+          onChooseWatchedFolder={() => {
+            void handleChooseWatchedFolder();
           }}
           onRefreshDiagnostics={() => {
             void refreshDiagnostics();

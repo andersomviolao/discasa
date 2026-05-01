@@ -12,6 +12,8 @@ The hosted Discord bot is maintained separately in the sibling `Discasa_bot` rep
 - App-specific images, fonts, source assets, and image-generation scripts under `img`.
 - Runtime translation files for English and Portuguese.
 - Local launchers for app-only and full-stack development.
+- Folder uploads that create albums from selected folders.
+- Watched-folder imports and duplicate-file collection views.
 
 ## Layout
 
@@ -69,6 +71,13 @@ npm run check
 npm run build:desktop
 npm run build:server
 ```
+
+## Library Automation
+
+- Uploading or dropping a folder creates an album named after that folder and places the discovered files inside it.
+- Settings can enable a watched folder, such as a screenshots directory. Discasa periodically imports new stable files from that folder and shows them in the `Watched` collection.
+- Discasa periodically groups duplicate library items in the `Duplicados` collection. The collection appears only while duplicates exist.
+- Moving files between albums is exclusive: files are removed from previous album memberships and kept only in the destination album.
 
 ## Asset Layout
 

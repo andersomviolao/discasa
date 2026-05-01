@@ -163,6 +163,7 @@ export type DiscasaConfig = {
   sidebarCollapsed: boolean;
   localMirrorEnabled: boolean;
   localMirrorPath: string | null;
+  language: "en" | "pt";
 };
 
 export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
@@ -176,6 +177,7 @@ export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
   sidebarCollapsed: false,
   localMirrorEnabled: false,
   localMirrorPath: null,
+  language: "en",
 };
 
 export type LocalStorageStatus = {

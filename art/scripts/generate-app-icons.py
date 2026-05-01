@@ -27,40 +27,38 @@ def wait_before_exit(exit_code: int = 0) -> None:
     sys.exit(exit_code)
 
 
-def resolve_project_root() -> Path:
+def resolve_repo_root() -> Path:
     script_dir = Path(__file__).resolve().parent
 
-    if script_dir.name.lower() == "art":
-        return script_dir.parent
+    for candidate in (script_dir, *script_dir.parents):
+        app_manifest = candidate / "discasa_app" / "package.json"
+        bot_manifest = candidate / "discasa_bot" / "package.json"
+        if app_manifest.exists() and bot_manifest.exists():
+            return candidate
 
-    if (script_dir / "package.json").exists():
-        return script_dir
-
-    if (script_dir.parent / "package.json").exists():
-        return script_dir.parent
-
-    return script_dir.parent
+    return script_dir.parents[1]
 
 
-PROJECT_ROOT = resolve_project_root()
-ART_DIR = PROJECT_ROOT / "art"
-SOURCE_IMAGE = ART_DIR / "Discasa-icon.png"
+REPO_ROOT = resolve_repo_root()
+APP_ROOT = REPO_ROOT / "discasa_app"
+ART_DIR = REPO_ROOT / "art"
+SOURCE_IMAGE = ART_DIR / "app" / "app-logo-source.png"
 
-ASSETS_DIR = PROJECT_ROOT / "apps" / "desktop" / "src" / "assets"
-TAURI_ICONS_DIR = PROJECT_ROOT / "apps" / "desktop" / "src-tauri" / "icons"
+ASSETS_DIR = APP_ROOT / "apps" / "desktop" / "src" / "assets"
+TAURI_ICONS_DIR = APP_ROOT / "apps" / "desktop" / "src-tauri" / "icons"
 
 SOFT_RESET_DIRS = [
-    PROJECT_ROOT / "node_modules",
-    PROJECT_ROOT / "apps" / "desktop" / "node_modules",
-    PROJECT_ROOT / "apps" / "desktop" / "dist",
-    PROJECT_ROOT / "apps" / "desktop" / "src-tauri" / "target",
-    PROJECT_ROOT / "apps" / "server" / "dist",
-    PROJECT_ROOT / "apps" / "server" / "node_modules",
-    PROJECT_ROOT / "target",
+    APP_ROOT / "node_modules",
+    APP_ROOT / "apps" / "desktop" / "node_modules",
+    APP_ROOT / "apps" / "desktop" / "dist",
+    APP_ROOT / "apps" / "desktop" / "src-tauri" / "target",
+    APP_ROOT / "apps" / "server" / "dist",
+    APP_ROOT / "apps" / "server" / "node_modules",
+    APP_ROOT / "target",
 ]
 
 SOFT_RESET_FILES = [
-    PROJECT_ROOT / "package-lock.json",
+    APP_ROOT / "package-lock.json",
 ]
 
 PNG_OUTPUTS = {
@@ -214,13 +212,13 @@ def run_npm_install() -> None:
         if os.name == "nt":
             result = subprocess.run(
                 ["cmd", "/c", "npm", "install"],
-                cwd=PROJECT_ROOT,
+                cwd=APP_ROOT,
                 check=False,
             )
         else:
             result = subprocess.run(
                 ["npm", "install"],
-                cwd=PROJECT_ROOT,
+                cwd=APP_ROOT,
                 check=False,
             )
     except FileNotFoundError:
@@ -242,19 +240,19 @@ def start_app() -> None:
 
     if os.name == "nt":
         subprocess.Popen(
-            'start "Discasa Server" cmd /k "cd /d ""{}"" && npm run dev:server"'.format(PROJECT_ROOT),
-            cwd=PROJECT_ROOT,
+            'start "Discasa Server" cmd /k "cd /d ""{}"" && npm run dev:server"'.format(APP_ROOT),
+            cwd=APP_ROOT,
             shell=True,
         )
         subprocess.Popen(
-            'start "Discasa Desktop" cmd /k "cd /d ""{}"" && npm --workspace @discasa/desktop exec tauri dev"'.format(PROJECT_ROOT),
-            cwd=PROJECT_ROOT,
+            'start "Discasa Desktop" cmd /k "cd /d ""{}"" && npm --workspace @discasa/desktop exec tauri dev"'.format(APP_ROOT),
+            cwd=APP_ROOT,
             shell=True,
         )
         return
 
-    subprocess.Popen(["npm", "run", "dev:server"], cwd=PROJECT_ROOT)
-    subprocess.Popen(["npm", "--workspace", "@discasa/desktop", "exec", "tauri", "dev"], cwd=PROJECT_ROOT)
+    subprocess.Popen(["npm", "run", "dev:server"], cwd=APP_ROOT)
+    subprocess.Popen(["npm", "--workspace", "@discasa/desktop", "exec", "tauri", "dev"], cwd=APP_ROOT)
 
 
 def main() -> None:
@@ -265,7 +263,8 @@ def main() -> None:
     print("Discasa - Generate Assets")
     print("==========================================")
     print("")
-    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Repository root: {REPO_ROOT}")
+    print(f"App root: {APP_ROOT}")
     print(f"Source image: {SOURCE_IMAGE}")
     print("")
     print("This will:")

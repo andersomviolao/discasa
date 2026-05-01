@@ -1,67 +1,76 @@
 # Discasa
 
-Discasa é uma biblioteca desktop de arquivos e mídia que usa Discord como camada de armazenamento e sincronização. A interface é local, o estado principal é coordenado pelo app, e o bot fica como um adaptador leve para operações pontuais na API do Discord.
+Discasa is a desktop file and media library that uses Discord as its storage and synchronization layer. The interface runs locally, the app coordinates the main product state, and the Discord bot is a small HTTP adapter for operations that require bot identity in Discord.
 
-O projeto está organizado em dois pacotes principais:
+The project is organized into two main packages:
 
-- `discasa_app`: aplicativo desktop, backend local e tipos compartilhados do app.
-- `discasa_bot`: serviço local do bot Discord, mantido pequeno para reduzir carga quando vários usuários usam o Discasa ao mesmo tempo.
+- `discasa_app`: desktop app, local backend, and shared app contracts.
+- `discasa_bot`: monolithic Discord bot service, kept small for online hosting and predictable resource usage.
+- `art`: source artwork and asset-generation scripts shared by the app and bot.
 
-Para detalhes completos de arquitetura e fluxos, veja [documentation.md](documentation.md).
+For full architecture and flow details, see [documentation.md](documentation.md).
 
-## Estado Atual
+## Current State
 
-O Discasa atualmente inclui:
+Discasa currently includes:
 
-- app desktop com Tauri 2, React 19 e Vite;
-- backend local em Node.js/Express para OAuth, API local, persistência, cache e coordenação de sincronização;
-- bot Discord em Node.js/Express com `discord.js`;
-- sincronização de arquivos no canal `discasa-drive`;
-- importação automática de arquivos adicionados manualmente no `discasa-drive`;
-- espelhamento local opcional, com importação automática de arquivos colocados diretamente na pasta espelhada;
-- limite fixo de `10 MiB` para cada upload enviado ao Discord;
-- chunking automático de arquivos maiores que `10 MiB`;
-- snapshots de índice, pastas e configuração armazenados no Discord;
-- fluxo de login/instalação com tela de sincronização dinâmica;
-- cache local de biblioteca, arquivos e thumbnails.
+- a Tauri 2, React 19, and Vite desktop app;
+- a local Node.js/Express backend for OAuth, local APIs, persistence, cache, and synchronization coordination;
+- a Node.js/Express Discord bot service with `discord.js`;
+- file synchronization through the `discasa-drive` channel;
+- automatic import of files manually added to `discasa-drive`;
+- optional local mirroring, with automatic import of files placed directly in the mirror folder;
+- a fixed `10 MiB` limit for each upload sent to Discord;
+- automatic chunking for files larger than `10 MiB`;
+- index, folder, and config snapshots stored in Discord;
+- runtime language switching between English and Portuguese;
+- a login/install flow with a dynamic synchronization screen;
+- local cache for the library, files, and thumbnails.
 
-## Arquitetura Resumida
+## Architecture Summary
 
 ```text
 Discasa
+  art
+    app              App source artwork
+    bot              Bot source artwork
+    fonts            Bundled design fonts
+    scripts          Asset-generation scripts
+    sources          External reference artwork
+
   discasa_app
-    apps/desktop     Interface Tauri + React
-    apps/server      Backend local do app
-    packages/shared  Tipos e contratos compartilhados
+    apps/desktop     Tauri + React interface
+    apps/server      Local app backend
+    packages/shared  Shared app contracts
 
   discasa_bot
-    src              Serviço HTTP do bot Discord
-    packages/shared  Tipos compartilhados usados pelo bot
+    src/index.ts     Monolithic Discord bot HTTP service
 ```
 
-O app é responsável por regras de produto e coordenação:
+The app owns product rules and coordination:
 
-- chunking e manifesto de arquivos grandes;
-- comparação e filtragem de anexos conhecidos;
-- importação automática de arquivos externos;
-- recovery/relink de snapshots;
-- trash, restore e delete;
-- cache local e espelhamento local;
-- OAuth e fluxo de setup.
+- chunking and large-file manifests;
+- known attachment comparison and filtering;
+- automatic external file import;
+- snapshot recovery and relinking;
+- trash, restore, and delete flows;
+- local cache and local mirroring;
+- OAuth and setup flow;
+- UI language state.
 
-O bot é responsável apenas por operações que precisam da identidade do bot no Discord:
+The bot only owns operations that require the Discord bot identity:
 
-- verificar status e instalação no servidor;
-- criar/reusar categoria e canais do Discasa;
-- enviar anexos para canais;
-- excluir mensagens de armazenamento;
-- listar páginas brutas de anexos;
-- resolver referências pontuais de anexos;
-- ler e escrever snapshots.
+- status and installation checks in a server;
+- creating or reusing the Discasa category and channels;
+- uploading attachments to channels;
+- deleting storage messages;
+- listing raw attachment pages;
+- resolving specific attachment references;
+- reading and writing snapshots.
 
-## Estrutura Criada no Discord
+## Discord Structure
 
-Ao aplicar o Discasa em um servidor, o app cria ou reutiliza:
+When Discasa is applied to a server, the app creates or reuses:
 
 ```text
 Discasa
@@ -70,30 +79,30 @@ Discasa
   #discasa-trash
 ```
 
-- `discasa-drive`: arquivos ativos.
-- `discasa-index`: snapshots de índice, pastas e configuração.
-- `discasa-trash`: armazenamento de itens enviados para a lixeira.
+- `discasa-drive`: active files.
+- `discasa-index`: index, folder, and config snapshots.
+- `discasa-trash`: storage for items moved to trash.
 
-Instalações antigas podem ter canais legados `discasa-folder` e `discasa-config`; o app ainda possui recuperação para esses formatos.
+Older installations can have legacy `discasa-folder` and `discasa-config` channels. The app still includes recovery for those formats.
 
-## Limite de Upload
+## Upload Limit
 
-O Discasa usa limite fixo de `10 MiB` por envio ao Discord, mesmo que o servidor aceite arquivos maiores por boost/plano. Isso evita quebrar o armazenamento caso o servidor sofra downgrade.
+Discasa always uses a fixed `10 MiB` Discord upload limit, even when a server currently accepts larger files because of boosts or plan changes. This prevents storage from breaking if the server is downgraded later.
 
-Arquivos maiores que `10 MiB` são divididos pelo app em partes menores e registrados em um manifesto `chunked`. A leitura/reconstrução acontece pelo app.
+Files larger than `10 MiB` are split by the app into smaller parts and registered in a `chunked` manifest. Reading and reconstruction are coordinated by the app.
 
-## Desenvolvimento
+## Development
 
-### Requisitos
+### Requirements
 
-- Node.js 20 ou superior.
-- Rust e dependências do Tauri para executar o desktop em modo desenvolvimento.
-- Uma aplicação Discord com OAuth configurado, quando `MOCK_MODE=false`.
-- Um bot Discord com token configurado, quando `MOCK_MODE=false`.
+- Node.js 20 or newer.
+- Rust and Tauri dependencies for running the desktop app in development mode.
+- A Discord application with OAuth configured when `MOCK_MODE=false`.
+- A Discord bot token when `MOCK_MODE=false`.
 
-### Instalação
+### Install
 
-Na raiz do repositório:
+From the repository root:
 
 ```powershell
 cd discasa_app
@@ -103,14 +112,14 @@ cd ..\discasa_bot
 npm install
 ```
 
-Copie os exemplos de ambiente:
+Copy the environment examples:
 
 ```powershell
 copy discasa_app\.env.example discasa_app\.env
 copy discasa_bot\.env.example discasa_bot\.env
 ```
 
-### Variáveis do App
+### App Variables
 
 `discasa_app\.env`:
 
@@ -125,7 +134,7 @@ DISCORD_BOT_URL=http://localhost:3002
 DISCORD_REDIRECT_URI=http://localhost:3001/auth/discord/callback
 ```
 
-### Variáveis do Bot
+### Bot Variables
 
 `discasa_bot\.env`:
 
@@ -135,27 +144,27 @@ MOCK_MODE=true
 DISCORD_BOT_TOKEN=
 ```
 
-### Executar
+### Run
 
-Use o launcher da raiz:
+Use the root launcher:
 
 ```powershell
 .\start.bat
 ```
 
-Ele inicia:
+It starts:
 
-- bot em `3002`;
-- backend local em `3001`;
-- desktop Tauri/Vite em `1420`.
+- bot on `3002`;
+- local backend on `3001`;
+- Tauri/Vite desktop on `1420`.
 
-Para parar:
+To stop:
 
 ```powershell
 .\stop.bat
 ```
 
-## Scripts Úteis
+## Useful Scripts
 
 App:
 
@@ -174,24 +183,24 @@ npm run check
 npm run build
 ```
 
-Reset local:
+Local reset:
 
 ```powershell
 .\hard-reset.bat
 ```
 
-O reset remove artefatos locais, `node_modules`, caches e dados locais do Discasa. Ele não remove canais ou arquivos existentes no Discord.
+The reset removes local generated artifacts, `node_modules`, caches, and Discasa local data. It does not remove existing Discord channels or files.
 
-## Portas de Desenvolvimento
+## Development Ports
 
-- `3001`: backend local do app.
-- `3002`: serviço local do bot.
+- `3001`: local app backend.
+- `3002`: bot service.
 - `1420`: Vite/Tauri desktop.
-- `5173`: porta alternativa usada pelo Vite em alguns cenários.
+- `5173`: alternate Vite port in some scenarios.
 
-## Dados Locais
+## Local Data
 
-No Windows, o Discasa usa:
+On Windows, Discasa uses:
 
 ```text
 %APPDATA%\Discasa
@@ -203,8 +212,8 @@ No Windows, o Discasa usa:
   thumbnails\
 ```
 
-Também existe cache de biblioteca por servidor no storage local do desktop.
+The desktop also keeps a per-server library cache in local storage.
 
-## Licença e Distribuição
+## License and Distribution
 
-O projeto ainda é privado/interno e não define uma licença pública neste repositório.
+This project is still private/internal and does not define a public license in this repository.

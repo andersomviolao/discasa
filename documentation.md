@@ -1,94 +1,109 @@
-# Documentação do Projeto Discasa
+# Discasa Project Documentation
 
-Este documento descreve o estado atual do Discasa: arquitetura, responsabilidades, fluxos principais, modelo de armazenamento, configuração local e cuidados operacionais.
+This document describes the current Discasa architecture, responsibilities, main flows, storage model, local configuration, and operational notes.
 
-## 1. Objetivo
+## 1. Goal
 
-Discasa é um aplicativo desktop para organizar arquivos e mídia usando Discord como backend de armazenamento. A ideia central é permitir que o usuário interaja com uma biblioteca local rica, enquanto os arquivos e snapshots ficam persistidos em canais privados dentro de um servidor Discord.
+Discasa is a desktop application for organizing files and media while using Discord as the remote storage backend. The core idea is to give the user a rich local library experience while files and snapshots are persisted in private channels inside a Discord server.
 
-O app deve continuar funcionando mesmo em cenários de mudança de plano do Discord. Por isso, o Discasa usa limite fixo de `10 MiB` por arquivo enviado ao Discord e divide arquivos maiores em chunks.
+Discasa must keep working even if a Discord server plan or boost level changes. For that reason, Discasa uses a fixed `10 MiB` upload limit per Discord attachment and splits larger files into chunks.
 
-## 2. Componentes
+## 2. Components
 
-### 2.1 `discasa_app`
+### 2.1 `art`
 
-Contém o aplicativo principal.
+Contains the project artwork sources and asset-generation scripts.
+
+```text
+art
+  app
+  bot
+  fonts
+  scripts
+  sources
+```
+
+The scripts in `art/scripts` read source artwork from the root `art` folder and write generated desktop assets back into `discasa_app`.
+
+### 2.2 `discasa_app`
+
+Contains the main application.
 
 ```text
 discasa_app
   apps/desktop
   apps/server
   packages/shared
-  art
 ```
 
-Responsabilidades:
+Responsibilities:
 
-- interface desktop;
-- OAuth com Discord;
-- API local usada pela interface;
-- persistência local;
-- cache de biblioteca, arquivos e thumbnails;
-- espelhamento local;
-- chunking de arquivos grandes;
-- manifestos de armazenamento;
-- sincronização de snapshots;
-- importação automática de arquivos externos;
-- recuperação de anexos e relink de URLs;
-- coordenação do bot.
+- desktop interface;
+- Discord OAuth;
+- local API used by the interface;
+- local persistence;
+- library, file, and thumbnail cache;
+- optional local mirroring;
+- large-file chunking;
+- storage manifests;
+- snapshot synchronization;
+- automatic external file import;
+- attachment recovery and URL relinking;
+- bot coordination;
+- UI language selection and runtime translation.
 
-### 2.2 `discasa_bot`
+### 2.3 `discasa_bot`
 
-Contém o serviço local do bot Discord.
+Contains the Discord bot HTTP service.
 
 ```text
 discasa_bot
-  src
-  packages/shared
-  art
+  src/index.ts
 ```
 
-Responsabilidades atuais:
+The bot is intentionally monolithic because it is expected to be hosted online. Keeping the hosted service in one source file reduces deployment surface and keeps all bot-only logic easy to audit.
 
-- iniciar cliente `discord.js`;
-- responder `/health`;
-- informar limite fixo de upload do Discasa;
-- inspecionar se o bot e a estrutura Discasa existem em um servidor;
-- criar/reusar categoria e canais;
-- enviar anexos;
-- excluir mensagens de armazenamento;
-- listar páginas brutas de anexos do `discasa-drive`;
-- resolver uma referência pontual de anexo;
-- ler e escrever snapshots.
+Current responsibilities:
 
-Responsabilidades removidas do bot e movidas para o app:
+- start the `discord.js` client;
+- respond to `/health`;
+- report Discasa's fixed upload limit;
+- inspect whether the bot and Discasa structure exist in a server;
+- create or reuse the category and channels;
+- upload attachments;
+- delete storage messages;
+- list raw attachment pages from `discasa-drive`;
+- resolve a specific attachment reference;
+- read and write snapshots.
 
-- decidir o que é arquivo novo no `discasa-drive`;
-- filtrar arquivos internos do Discasa;
-- comparar anexos conhecidos;
-- executar o loop de recovery/relink do snapshot;
-- mover arquivo para lixeira;
-- restaurar arquivo;
-- excluir permanentemente item da biblioteca;
-- listar servidores elegíveis via token OAuth do usuário.
+Responsibilities kept out of the bot and owned by the app:
 
-Esse desenho deixa o bot mais leve para cenários com muitos usuários simultâneos.
+- decide which files are new in `discasa-drive`;
+- filter internal Discasa files;
+- compare known attachments;
+- run the snapshot recovery/relink loop;
+- move files to trash;
+- restore files;
+- permanently delete library items;
+- list eligible servers with the user's OAuth token.
 
-## 3. Diagrama de Alto Nível
+This design keeps the bot lightweight for online hosting and high-concurrency scenarios.
+
+## 3. High-Level Diagram
 
 ```mermaid
 flowchart LR
-  UI["Desktop Tauri + React"] --> Server["Backend local do app"]
+  UI["Tauri + React Desktop"] --> Server["Local App Backend"]
   Server --> LocalData["AppData / LocalAppData / Cache"]
-  Server --> Bot["Serviço local do bot"]
+  Server --> Bot["Monolithic Bot Service"]
   Server --> DiscordOAuth["Discord OAuth API"]
   Bot --> DiscordBot["Discord Bot API"]
-  DiscordBot --> Channels["Canais Discasa no servidor"]
+  DiscordBot --> Channels["Discasa Channels in Server"]
 ```
 
-## 4. Estrutura no Discord
+## 4. Discord Structure
 
-Ao aplicar o Discasa em um servidor, a estrutura esperada é:
+When Discasa is applied to a server, the expected structure is:
 
 ```text
 Discasa
@@ -99,83 +114,83 @@ Discasa
 
 ### 4.1 `discasa-drive`
 
-Canal usado para arquivos ativos. Cada upload normal gera uma mensagem com um anexo. Arquivos grandes são armazenados como múltiplas mensagens de partes `.discasa.partXXXX`.
+Channel used for active files. Each normal upload creates a message with one attachment. Large files are stored as multiple `.discasa.partXXXX` messages.
 
-Arquivos enviados manualmente nesse canal, fora da interface do Discasa, são detectados automaticamente pelo app e entram na biblioteca.
+Files manually uploaded to this channel outside the Discasa interface are detected automatically by the app and imported into the library.
 
 ### 4.2 `discasa-index`
 
-Canal usado para snapshots JSON:
+Channel used for JSON snapshots:
 
 - `discasa-index.snapshot.json`;
 - `discasa-folder.snapshot.json`;
 - `discasa-config.snapshot.json`;
 - `discasa-install.marker.json`.
 
-Também pode conter snapshots legados, como `discasa-index.json`.
+It can also contain legacy snapshots, such as `discasa-index.json`.
 
 ### 4.3 `discasa-trash`
 
-Canal usado para armazenamento de itens enviados para a lixeira.
+Channel used for items moved to trash.
 
-### 4.4 Canais Legados
+### 4.4 Legacy Channels
 
-Instalações antigas podem ter:
+Older installations can have:
 
 - `discasa-folder`;
 - `discasa-config`.
 
-O Discasa ainda tenta migrar/recuperar snapshots desses canais quando necessário.
+Discasa still attempts to migrate or recover snapshots from these channels when needed.
 
-## 5. Modelo de Armazenamento
+## 5. Storage Model
 
-### 5.1 Limite Fixo
+### 5.1 Fixed Limit
 
-O limite operacional do Discasa é:
+Discasa's operational limit is:
 
 ```text
 10 MiB = 10 * 1024 * 1024 bytes = 10485760 bytes
 ```
 
-Esse limite é fixo e independe do nível de boost/plano do servidor Discord.
+This limit is fixed and does not depend on the Discord server boost level or plan.
 
-Motivo:
+Reasoning:
 
-- se um servidor aceita arquivos maiores hoje, mas recebe downgrade depois, uploads futuros poderiam quebrar;
-- usando sempre `10 MiB`, todos os servidores suportados permanecem dentro do menor limite esperado;
-- arquivos maiores continuam funcionando por chunking.
+- if a server accepts larger files today but is downgraded later, future uploads could break;
+- always using `10 MiB` keeps all supported servers inside the smallest expected limit;
+- larger files still work through chunking.
 
 ### 5.2 Chunking
 
-O app decide se um arquivo precisa ser dividido. Quando `size > 10 MiB`, ele cria partes menores que o limite e envia cada parte ao bot para upload no Discord.
+The app decides whether a file must be split. When `size > 10 MiB`, it creates parts smaller than the limit and sends each part to the bot for Discord upload.
 
-O manifesto registra:
+The manifest records:
 
-- modo `chunked`;
-- versão do manifesto;
-- tamanho do chunk;
-- número total de chunks;
-- tamanho total;
-- hash SHA-256 do arquivo completo;
-- lista de partes com nome, tamanho, hash, URL e IDs de canal/mensagem.
+- `chunked` mode;
+- manifest version;
+- chunk size;
+- total chunk count;
+- total size;
+- SHA-256 hash for the full file;
+- part list with name, size, hash, URL, channel ID, and message ID.
 
-### 5.3 Arquivos Pequenos
+### 5.3 Small Files
 
-Arquivos até `10 MiB` são enviados como um anexo único.
+Files up to `10 MiB` are sent as a single attachment.
 
-### 5.4 Arquivos Grandes
+### 5.4 Large Files
 
-Arquivos maiores que `10 MiB` são enviados como partes. A interface continua tratando o item como um arquivo único.
+Files larger than `10 MiB` are sent as parts. The interface still treats the item as a single file.
 
 ## 6. Snapshots
 
-O Discasa usa snapshots para reconstruir o estado remoto.
+Discasa uses snapshots to rebuild remote state.
 
 ### 6.1 Index Snapshot
 
-Contém a lista de itens da biblioteca sem URLs runtime do desktop.
+Contains the library item list without desktop runtime URLs.
 
-Campos relevantes por item:
+Relevant item fields:
 
 - `id`;
 - `name`;
@@ -195,111 +210,112 @@ Campos relevantes por item:
 
 ### 6.2 Folder Snapshot
 
-Contém:
+Contains:
 
-- pastas/álbuns;
-- relação entre item e pasta;
-- ordenação;
+- folders/albums;
+- item-to-folder relationships;
+- ordering;
 - timestamps.
 
 ### 6.3 Config Snapshot
 
-Contém preferências persistidas no Discord:
+Contains preferences persisted in Discord:
 
-- cor de destaque;
-- minimizar/fechar para bandeja;
-- zoom de thumbnail;
-- modo de visualização da galeria;
-- comportamento da roda do mouse;
-- estado da sidebar;
-- configuração de espelhamento local.
+- accent color;
+- minimize/close to tray;
+- thumbnail zoom;
+- gallery display mode;
+- viewer mouse wheel behavior;
+- sidebar state;
+- local mirror configuration;
+- interface language.
 
-## 7. Fluxo de Login e Instalação
+## 7. Login and Installation Flow
 
-1. Usuário inicia login com Discord.
-2. Browser abre fluxo OAuth.
-3. Backend local recebe callback.
-4. App lista servidores elegíveis.
-5. Usuário escolhe servidor.
-6. App verifica se o bot está presente.
-7. Se necessário, usuário instala o bot.
-8. App aplica o Discasa no servidor.
-9. Bot cria/reusa categoria e canais.
-10. App hidrata snapshots remotos.
-11. App faz recovery/relink de anexos.
-12. App importa arquivos externos encontrados.
-13. Interface principal abre.
+1. User starts Discord login.
+2. Browser opens the OAuth flow.
+3. Local backend receives the callback.
+4. App lists eligible servers.
+5. User chooses a server.
+6. App checks whether the bot is present.
+7. If needed, user installs the bot.
+8. App applies Discasa to the server.
+9. Bot creates or reuses the category and channels.
+10. App hydrates remote snapshots.
+11. App runs attachment recovery/relink.
+12. App imports external files found in Discord or local mirror storage.
+13. Main interface opens.
 
-Durante a etapa demorada de aplicar/sincronizar, a interface mostra uma tela de carregamento dinâmica para deixar claro que há trabalho em andamento.
+During the longer apply/sync step, the interface shows a dynamic loading screen so the user can see that work is still in progress.
 
-## 8. Fluxo de Upload
+## 8. Upload Flow
 
-1. Usuário arrasta arquivos para a interface.
-2. Desktop envia arquivos para o backend local.
-3. Backend local verifica o contexto ativo.
-4. Para cada arquivo:
-   - se `<= 10 MiB`, envia uma vez;
-   - se `> 10 MiB`, divide em chunks.
-5. Bot executa uploads pontuais no Discord.
-6. App cria registros de biblioteca.
-7. App atualiza snapshots.
-8. App atualiza cache local e thumbnails quando aplicável.
+1. User drags files into the interface.
+2. Desktop sends files to the local backend.
+3. Backend checks the active storage context.
+4. For each file:
+   - if `<= 10 MiB`, send once;
+   - if `> 10 MiB`, split into chunks.
+5. Bot performs targeted Discord uploads.
+6. App creates library records.
+7. App updates snapshots.
+8. App updates local cache and thumbnails when applicable.
 
-## 9. Importação Automática
+## 9. Automatic Import
 
-### 9.1 Arquivos no `discasa-drive`
+### 9.1 Files in `discasa-drive`
 
-O app consulta páginas brutas de anexos no bot e faz localmente:
+The app asks the bot for raw attachment pages and then locally handles:
 
-- filtragem de arquivos internos do Discasa;
-- comparação contra itens conhecidos;
-- deduplicação por canal/mensagem/nome/tamanho e URL;
-- criação de registros novos.
+- internal Discasa file filtering;
+- comparison against known items;
+- deduplication by channel/message/name/size and URL;
+- new record creation.
 
-Isso permite que arquivos enviados manualmente no canal `discasa-drive` apareçam na interface.
+This allows files manually uploaded to `discasa-drive` to appear in the interface.
 
-### 9.2 Arquivos na Pasta Espelhada
+### 9.2 Files in the Local Mirror Folder
 
-Quando o espelhamento local está ativado:
+When local mirroring is enabled:
 
-1. app varre a raiz da pasta espelhada;
-2. ignora arquivos gerenciados pelo Discasa;
-3. ignora arquivos temporários ou ainda sendo copiados;
-4. envia arquivos novos ao Discord;
-5. usa chunking quando necessário;
-6. adota o arquivo local para o nome gerenciado pelo Discasa;
-7. atualiza biblioteca e snapshots.
+1. app scans the mirror folder root;
+2. ignores files managed by Discasa;
+3. ignores temporary files or files that are still being copied;
+4. uploads new files to Discord;
+5. uses chunking when needed;
+6. adopts the local file into Discasa's managed naming scheme;
+7. updates library and snapshots.
 
-## 10. Trash, Restore e Delete
+## 10. Trash, Restore, and Delete
 
-Esses fluxos são coordenados pelo app:
+These flows are coordinated by the app:
 
-- mover para lixeira;
-- restaurar;
-- apagar permanentemente.
+- move to trash;
+- restore;
+- permanently delete.
 
-O bot apenas executa uploads/deletes de mensagens quando solicitado.
+The bot only performs message uploads/deletes when requested.
 
-Para arquivos chunked, o app move/restaura/deleta todas as partes do manifesto.
+For chunked files, the app moves, restores, or deletes every manifest part.
 
-## 11. Recovery e Relink
+## 11. Recovery and Relink
 
-URLs de anexos do Discord podem mudar ou expirar. O app executa o recovery do snapshot:
+Discord attachment URLs can change or expire. The app performs snapshot recovery:
 
-1. percorre cada item do snapshot;
-2. resolve referência direta por canal/mensagem;
-3. quando necessário, pede ao bot busca pontual em canais candidatos;
-4. atualiza `attachmentUrl`, canal e mensagem;
-5. marca item como `missing` quando não consegue resolver;
-6. gera warnings para a interface.
+1. iterate through each snapshot item;
+2. resolve direct channel/message references;
+3. when needed, ask the bot for a targeted search in candidate channels;
+4. update `attachmentUrl`, channel, and message;
+5. mark item as `missing` when it cannot be resolved;
+6. generate warnings for the interface.
 
-O loop e as decisões ficam no app; o bot apenas tenta resolver uma referência de anexo.
+The loop and decisions stay in the app. The bot only attempts to resolve a specific attachment reference.
 
-## 12. Espelhamento Local
+## 12. Local Mirroring
 
-O espelhamento local permite manter cópias em disco.
+Local mirroring keeps managed copies on disk.
 
-Local padrão:
+Default location:
 
 ```text
 %LOCALAPPDATA%\Discasa\Cache\files
@@ -311,51 +327,66 @@ Thumbnails:
 %LOCALAPPDATA%\Discasa\Cache\thumbnails
 ```
 
-Configuração e sessão:
+Configuration and session:
 
 ```text
 %APPDATA%\Discasa
 ```
 
-Se o usuário configurou uma pasta customizada e ela não existe em outro computador, o setup pede uma nova pasta ou permite usar o padrão.
+If the user configured a custom folder and it does not exist on another computer, setup asks for a new folder or allows the default path.
 
-## 13. Cache Local
+## 13. Local Cache
 
-O desktop mantém cache por servidor para renderizar a biblioteca rapidamente na inicialização. Depois, o backend reconcilia com os snapshots atuais do Discord.
+The desktop keeps a per-server cache to render the library quickly at startup. The backend then reconciles with the current Discord snapshots.
 
-Esse cache melhora o primeiro paint, mas o estado autoritativo continua sendo o snapshot remoto e a persistência local do app.
+This cache improves first paint, but the authoritative state remains the remote snapshot and app local persistence.
 
-## 14. API Local do App
+## 14. Runtime Language Switching
 
-O backend local roda por padrão em:
+The desktop supports English and Portuguese. Language is stored in `DiscasaConfig.language`, so it can sync through the same config snapshot as the rest of the app settings.
+
+The source interface remains English. Runtime translation files live in:
+
+```text
+discasa_app/apps/desktop/src/i18n
+  en.ts
+  pt.ts
+  index.ts
+```
+
+Changing the language in Settings applies immediately without restarting the desktop app. The runtime translator also watches newly rendered interface nodes so modal content and delayed UI updates are translated after the switch.
+
+## 15. Local App API
+
+The local backend runs by default at:
 
 ```text
 http://localhost:3001
 ```
 
-Principais áreas:
+Main areas:
 
-- autenticação Discord;
-- sessão;
-- listagem de servidores;
-- status do bot;
-- inicialização do Discasa;
-- biblioteca;
-- álbuns/pastas;
+- Discord authentication;
+- session;
+- eligible server listing;
+- bot status;
+- Discasa initialization;
+- library;
+- albums/folders;
 - upload;
-- conteúdo e thumbnails;
+- content and thumbnails;
 - settings/config;
-- importação automática externa.
+- automatic external import.
 
-## 15. API Local do Bot
+## 16. Bot API
 
-O bot roda por padrão em:
+The bot runs by default at:
 
 ```text
 http://localhost:3002
 ```
 
-Principais áreas:
+Main endpoints:
 
 - `GET /health`;
 - `GET /guilds/:guildId/upload-limit`;
@@ -365,44 +396,44 @@ Principais áreas:
 - `POST /files/delete-messages`;
 - `POST /files/drive/attachments`;
 - `POST /files/resolve-attachment`;
-- endpoints de snapshots.
+- snapshot endpoints.
 
-O bot não deve voltar a concentrar regras de biblioteca. Sempre que uma regra puder rodar no app, ela deve ficar no app.
+The bot should not regain library product rules. Whenever a rule can run in the app, it should stay in the app.
 
-## 16. Rate Limits e Concorrência
+## 17. Rate Limits and Concurrency
 
-O Discasa foi ajustado para reduzir pressão no bot:
+Discasa reduces pressure on the bot by keeping coordination in the app:
 
-- app faz chunking antes de chamar o bot;
-- app faz filtragem e recovery localmente;
-- bot serializa escritas no Discord com uma fila;
-- uploads grandes viram uma sequência controlada de partes;
-- limite fixo de `10 MiB` evita dependência de boost/plano;
-- bot fica como adaptador fino, reduzindo CPU/memória por usuário.
+- app chunks files before calling the bot;
+- app filters and recovers state locally;
+- bot serializes Discord writes with a queue;
+- large uploads become a controlled sequence of parts;
+- fixed `10 MiB` limit avoids boost/plan dependence;
+- bot stays a thin adapter, reducing CPU and memory per user.
 
-Em um cenário com muitos usuários simultâneos, o custo principal passa para os apps locais. O serviço do bot recebe operações menores e mais previsíveis.
+In a high-concurrency scenario, the main cost moves to local apps. The hosted bot service receives smaller, more predictable operations.
 
-## 17. Mock Mode
+## 18. Mock Mode
 
-`MOCK_MODE=true` permite desenvolver sem Discord real.
+`MOCK_MODE=true` allows development without real Discord access.
 
-No app:
-
-```env
-MOCK_MODE=true
-```
-
-No bot:
+In the app:
 
 ```env
 MOCK_MODE=true
 ```
 
-Para integração real com Discord, use `MOCK_MODE=false` e configure credenciais OAuth e token do bot.
+In the bot:
 
-## 18. Desenvolvimento
+```env
+MOCK_MODE=true
+```
 
-Instalação:
+For real Discord integration, use `MOCK_MODE=false` and configure OAuth credentials plus the bot token.
+
+## 19. Development
+
+Install:
 
 ```powershell
 cd discasa_app
@@ -412,13 +443,13 @@ cd ..\discasa_bot
 npm install
 ```
 
-Execução completa:
+Full run:
 
 ```powershell
 .\start.bat
 ```
 
-Parar processos:
+Stop processes:
 
 ```powershell
 .\stop.bat
@@ -445,7 +476,7 @@ cd ..\discasa_bot
 npm run build
 ```
 
-## 19. Reset Local
+## 20. Local Reset
 
 Use:
 
@@ -453,22 +484,22 @@ Use:
 .\hard-reset.bat
 ```
 
-Ele remove:
+It removes:
 
 - `node_modules`;
 - `package-lock.json`;
-- builds locais;
-- cache e dados locais do Discasa;
-- dados legados do protótipo.
+- local builds;
+- Discasa local cache and data;
+- legacy prototype data.
 
-Ele não remove canais, mensagens ou arquivos no Discord.
+It does not remove Discord channels, messages, or files.
 
-## 20. Diretrizes de Manutenção
+## 21. Maintenance Guidelines
 
-- Manter regras de produto no app.
-- Manter o bot pequeno e previsível.
-- Não usar limite dinâmico de upload baseado em boost do Discord.
-- Preservar chunking para arquivos maiores que `10 MiB`.
-- Evitar bot processando snapshots completos quando o app puder coordenar.
-- Validar app e bot antes de push.
-- Atualizar este documento quando fluxos ou responsabilidades mudarem.
+- Keep product rules in the app.
+- Keep the hosted bot small, predictable, and monolithic.
+- Do not use a dynamic upload limit based on Discord boost level.
+- Preserve chunking for files larger than `10 MiB`.
+- Avoid making the bot process full snapshots when the app can coordinate.
+- Validate app and bot before pushing changes.
+- Update this document when flows or responsibilities change.

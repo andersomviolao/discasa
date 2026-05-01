@@ -3,16 +3,12 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc --noEmit -p tsconfig.json",
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@discasa/shared": "0.0.0",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",

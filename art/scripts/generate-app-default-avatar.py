@@ -29,25 +29,22 @@ def wait_before_exit(exit_code: int = 0) -> None:
     sys.exit(exit_code)
 
 
-def resolve_project_root() -> Path:
+def resolve_repo_root() -> Path:
     script_dir = Path(__file__).resolve().parent
 
-    if script_dir.name.lower() == "art":
-        return script_dir.parent
+    for candidate in (script_dir, *script_dir.parents):
+        app_manifest = candidate / "discasa_app" / "package.json"
+        bot_manifest = candidate / "discasa_bot" / "package.json"
+        if app_manifest.exists() and bot_manifest.exists():
+            return candidate
 
-    if (script_dir / "package.json").exists():
-        return script_dir
-
-    if (script_dir.parent / "package.json").exists():
-        return script_dir.parent
-
-    return script_dir.parent
+    return script_dir.parents[1]
 
 
-PROJECT_ROOT = resolve_project_root()
-ART_DIR = PROJECT_ROOT / "art"
-SOURCE_IMAGE = ART_DIR / "Discasa-avatar.png"
-ASSETS_DIR = PROJECT_ROOT / "apps" / "desktop" / "src" / "assets"
+REPO_ROOT = resolve_repo_root()
+ART_DIR = REPO_ROOT / "art"
+SOURCE_IMAGE = ART_DIR / "app" / "app-default-avatar-source.png"
+ASSETS_DIR = REPO_ROOT / "discasa_app" / "apps" / "desktop" / "src" / "assets"
 OUTPUT_IMAGE = ASSETS_DIR / OUTPUT_FILENAME
 
 
@@ -120,10 +117,10 @@ def main() -> None:
     ensure_directories()
 
     print("==========================================")
-    print("Discasa - Generate Default Avatar")
+    print("Discasa - Generate App Default Avatar")
     print("==========================================")
     print("")
-    print(f"Project root: {PROJECT_ROOT}")
+    print(f"Repository root: {REPO_ROOT}")
     print(f"Source image: {SOURCE_IMAGE}")
     print(f"Output image: {OUTPUT_IMAGE}")
     print("")

@@ -1,5 +1,6 @@
 import {
   StrictMode,
+  useDeferredValue,
   useEffect,
   useMemo,
   useRef,
@@ -35,6 +36,13 @@ import {
 import logoUrl from "./assets/discasa-logo.png";
 import defaultAvatarUrl from "./assets/discasa-default-avatar.png";
 import "./styles.css";
+import {
+  applyInterfaceLanguage,
+  readStoredLanguage,
+  supportedLanguages,
+  writeStoredLanguage,
+  type InterfaceLanguage,
+} from "./i18n";
 import {
   logoutDiscord,
   addLibraryItemsToAlbum,
@@ -378,6 +386,7 @@ export function App() {
   const [minimizeToTray, setMinimizeToTray] = useState<boolean>(() => readStoredBoolean(MINIMIZE_TO_TRAY_KEY, false));
   const [closeToTray, setCloseToTray] = useState<boolean>(() => readStoredBoolean(CLOSE_TO_TRAY_KEY, false));
   const [accentColor, setAccentColor] = useState<string>(() => readStoredString(ACCENT_COLOR_KEY, DEFAULT_ACCENT_HEX));
+  const [language, setLanguage] = useState<InterfaceLanguage>(() => readStoredLanguage(DISCASA_DEFAULT_CONFIG.language));
   const [localMirrorEnabled, setLocalMirrorEnabled] = useState(DISCASA_DEFAULT_CONFIG.localMirrorEnabled);
   const [localMirrorPath, setLocalMirrorPath] = useState<string>(DISCASA_DEFAULT_CONFIG.localMirrorPath ?? "");
   const [mediaPreviewVolume, setMediaPreviewVolume] = useState(DISCASA_DEFAULT_CONFIG.mediaPreviewVolume);
@@ -579,6 +588,11 @@ export function App() {
       window.localStorage.setItem(ACCENT_COLOR_KEY, normalized);
     }
   }, [accentColor]);
+
+  useEffect(() => {
+    writeStoredLanguage(language);
+    return applyInterfaceLanguage(language);
+  }, [language]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -828,6 +842,7 @@ export function App() {
     setMediaPreviewVolume(clampNumber(nextConfig.mediaPreviewVolume, 0, 1));
     setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
     setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
+    setLanguage(nextConfig.language);
   }
 
   async function loadRemoteConfig(): Promise<void> {
@@ -1060,7 +1075,8 @@ export function App() {
     [activeGuildName, sessionAvatarUrl, sessionName],
   );
 
-  const visibleItems = useMemo(() => getVisibleItems(items, selectedView), [items, selectedView]);
+  const deferredItems = useDeferredValue(items);
+  const visibleItems = useMemo(() => getVisibleItems(deferredItems, selectedView), [deferredItems, selectedView]);
   const visibleItemIds = useMemo(() => visibleItems.map((item) => item.id), [visibleItems]);
   const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
   const currentDescription = useMemo(() => getCurrentDescription(selectedView), [selectedView]);
@@ -1995,6 +2011,11 @@ export function App() {
     void persistConfigPatch({ accentColor: normalized });
   }
 
+  function handleChangeLanguage(nextLanguage: InterfaceLanguage): void {
+    setLanguage(nextLanguage);
+    void persistConfigPatch({ language: nextLanguage });
+  }
+
   async function handleStartDragging(event: ReactMouseEvent<HTMLElement>): Promise<void> {
     if (event.button !== 0) return;
 
@@ -2424,6 +2445,7 @@ export function App() {
           minimizeToTray={minimizeToTray}
           closeToTray={closeToTray}
           accentColor={accentColor}
+          language={language}
           localMirrorEnabled={localMirrorEnabled}
           localMirrorPath={localMirrorPath}
           localStorageStatus={localStorageStatus}
@@ -2434,6 +2456,7 @@ export function App() {
           onChangeCloseToTray={handleChangeCloseToTray}
           onChangeLocalMirrorEnabled={handleChangeLocalMirrorEnabled}
           onChangeLocalMirrorPath={handleChangeLocalMirrorPath}
+          onChangeLanguage={handleChangeLanguage}
           onChooseLocalMirrorFolder={() => {
             void handleChooseLocalMirrorFolder();
           }}
@@ -2876,7 +2899,7 @@ export function BaseModal({
             onClick={onClose}
             aria-label={closeButtonAriaLabel}
           >
-            <span className="modal-close-glyph">×</span>
+            <span className="modal-close-glyph">&times;</span>
           </button>
         ) : null}
       </div>
@@ -3647,7 +3670,7 @@ export function DeleteAlbumModal({
       <div className="delete-album-modal-content">
         <div className="album-modal-header delete-album-modal-header">
           <h2>Delete album</h2>
-          <p>Delete the album “{albumName}”?</p>
+          <p>Delete the album "{albumName}"?</p>
         </div>
 
         <p className="delete-album-modal-copy">
@@ -3704,7 +3727,7 @@ export function DeleteFileModal({
       <div className="delete-album-modal-content">
         <div className="album-modal-header delete-album-modal-header">
           <h2>Delete file</h2>
-          <p>Delete “{fileName}” permanently?</p>
+          <p>Delete "{fileName}" permanently?</p>
         </div>
 
         <p className="delete-album-modal-copy">
@@ -5716,14 +5739,14 @@ export function MediaViewerModal({
             {!saveError && saveNotice ? <span className="media-viewer-save-status success">{saveNotice}</span> : null}
             <div className="media-viewer-shortcuts-hint">
               <span>Esc Close</span>
-              <span>←/→ Navigate</span>
+              <span>Arrow keys Navigate</span>
               {imageMode ? <span>Q/E Rotate</span> : null}
               {imageMode ? <span>C Crop</span> : null}
               {imageMode ? <span>S Save</span> : null}
               {hasSavedEdit ? <span>O Original</span> : null}
             </div>
             <div className="media-viewer-zoom-readout" aria-live="polite">
-              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% • Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : audioMode ? "Player" : "Preview"}
+              {imageMode ? `${Math.round(draftState.zoomLevel * 100)}% | Wheel: ${wheelBehavior === "zoom" ? "Zoom" : "Navigate"}` : audioMode ? "Player" : "Preview"}
             </div>
           </div>
         </footer>
@@ -5745,6 +5768,7 @@ type SettingsModalProps = {
   minimizeToTray: boolean;
   closeToTray: boolean;
   accentColor: string;
+  language: InterfaceLanguage;
   localMirrorEnabled: boolean;
   localMirrorPath: string;
   localStorageStatus: LocalStorageStatus | null;
@@ -5755,6 +5779,7 @@ type SettingsModalProps = {
   onChangeCloseToTray: (checked: boolean) => void;
   onChangeLocalMirrorEnabled: (checked: boolean) => void;
   onChangeLocalMirrorPath: (value: string) => void;
+  onChangeLanguage: (language: InterfaceLanguage) => void;
   onChooseLocalMirrorFolder: () => void;
   onCommitAccentColor: (value: string) => void;
 };
@@ -5763,6 +5788,7 @@ const settingsSections: Array<{ id: SettingsSection; label: string }> = [
   { id: "discord", label: "Discord" },
   { id: "appearance", label: "Appearance" },
   { id: "storage", label: "Storage" },
+  { id: "language", label: "Language" },
   { id: "window", label: "Window" },
 ];
 
@@ -6081,6 +6107,7 @@ export function SettingsModal({
   minimizeToTray,
   closeToTray,
   accentColor,
+  language,
   localMirrorEnabled,
   localMirrorPath,
   localStorageStatus,
@@ -6091,6 +6118,7 @@ export function SettingsModal({
   onChangeCloseToTray,
   onChangeLocalMirrorEnabled,
   onChangeLocalMirrorPath,
+  onChangeLanguage,
   onChooseLocalMirrorFolder,
   onCommitAccentColor,
 }: SettingsModalProps) {
@@ -6321,6 +6349,39 @@ export function SettingsModal({
 
     if (settingsSection === "storage") {
       return renderStorageContent();
+    }
+
+    if (settingsSection === "language") {
+      return (
+        <>
+          <div className="settings-modal-header">
+            <div>
+              <h2>Language</h2>
+              <p>The interface updates as soon as you choose a language.</p>
+            </div>
+          </div>
+
+          <div className="settings-card panel-surface-secondary">
+            <div className="settings-field-stack">
+              <label className="settings-input-label" htmlFor="interface-language">
+                Interface language
+              </label>
+              <select
+                id="interface-language"
+                className="form-text-input settings-select-input"
+                value={language}
+                onChange={(event) => onChangeLanguage(event.currentTarget.value as InterfaceLanguage)}
+              >
+                {supportedLanguages.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </>
+      );
     }
 
     return (

@@ -2355,6 +2355,9 @@ img {
   display: flex;
   flex-direction: column;
   gap: var(--size-8);
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: var(--file-card-width) var(--size-280);
   cursor: default;
   opacity: 1;
   transform: translateY(0);

@@ -402,6 +402,10 @@ function normalizeLocalMirrorPath(raw: unknown): string | null {
     : resolved;
 }
 
+function normalizeLanguage(raw: unknown): DiscasaConfig["language"] {
+  return raw === "pt" ? "pt" : "en";
+}
+
 function normalizeDiscasaConfig(raw: unknown): DiscasaConfig {
   const entry = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const fallback = DISCASA_DEFAULT_CONFIG;
@@ -428,6 +432,7 @@ function normalizeDiscasaConfig(raw: unknown): DiscasaConfig {
     localMirrorEnabled:
       typeof entry.localMirrorEnabled === "boolean" ? entry.localMirrorEnabled : fallback.localMirrorEnabled,
     localMirrorPath: normalizeLocalMirrorPath(entry.localMirrorPath),
+    language: normalizeLanguage(entry.language),
   };
 }
 

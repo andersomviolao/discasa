@@ -43,7 +43,7 @@ export type HsvColor = {
   value: number;
 };
 
-export type SettingsSection = "discord" | "appearance" | "storage" | "window";
+export type SettingsSection = "discord" | "appearance" | "storage" | "language" | "window";
 export type WindowState = "default" | "maximized";
 
 export type FixedLibraryViewId = "all-files" | "favorites" | "trash";

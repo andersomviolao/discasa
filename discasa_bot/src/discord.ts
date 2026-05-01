@@ -1,15 +1,11 @@
 import {
   DISCASA_CATEGORY_NAME,
   DISCASA_CHANNELS,
-  type DiscasaAttachmentRecoveryWarning,
   type DiscasaConfig,
   type FolderMembership,
   type FolderNode,
-  type GuildSummary,
   type LibraryItem,
   type LibraryItemIndex,
-  type LibraryItemStorageManifest,
-  type LibraryItemStoragePart,
   type PersistedConfigSnapshot,
   type PersistedFolderSnapshot,
   type PersistedIndexSnapshot,
@@ -28,23 +24,6 @@ import {
 } from "discord.js";
 import { env } from "./config";
 import type { ActiveStorageContext, UploadedFileRecord } from "./storage-types";
-
-type DiscordUserGuild = {
-  id: string;
-  name: string;
-  owner: boolean;
-  permissions: string;
-};
-
-export class DiscordAuthorizationError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "DiscordAuthorizationError";
-  }
-}
 
 export class DiscordStorageUnavailableError extends Error {
   constructor(readonly channelId: string) {
@@ -83,32 +62,33 @@ type DiscasaSetupStatus = {
   missingChannels: string[];
 };
 
-type StoredAttachmentPointer = {
+export type StoredAttachmentPointer = {
   channelId: string;
   messageId: string;
   attachmentUrl: string;
 };
 
-type AttachmentResolution = {
-  attachmentUrl: string;
+export type AttachmentReferenceRequest = {
+  preferredFileName: string;
+  currentAttachmentUrl?: string;
   storageChannelId?: string;
   storageMessageId?: string;
-  storageManifest?: LibraryItemStorageManifest | null;
+  candidateChannelIds: string[];
+  botAuthoredOnly?: boolean;
+};
+
+export type AttachmentReferenceResolution = StoredAttachmentPointer & {
   method: "message-reference" | "history-scan";
 };
 
-export type RefreshIndexSnapshotResult = {
-  snapshot: PersistedIndexSnapshot;
-  relinkedItemCount: number;
-  unresolvedItems: DiscasaAttachmentRecoveryWarning[];
-  didChange: boolean;
+export type DiscordDriveAttachmentRecord = UploadedFileRecord & {
+  proxyUrl?: string;
 };
 
-export type DiscordDriveScanResult = {
-  records: UploadedFileRecord[];
+export type DiscordDriveAttachmentPage = {
+  records: DiscordDriveAttachmentRecord[];
   scannedAttachmentCount: number;
-  skippedAttachmentCount: number;
-  skippedGroupedMessageCount: number;
+  nextBeforeMessageId?: string;
 };
 
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
@@ -119,7 +99,6 @@ const INSTALL_MARKER_FILENAME = "discasa-install.marker.json";
 const LEGACY_FOLDER_CHANNEL_NAME = "discasa-folder";
 const LEGACY_CONFIG_CHANNEL_NAME = "discasa-config";
 const DISCASA_UPLOAD_LIMIT_BYTES = 10 * 1024 * 1024;
-const DISCASA_CHUNK_PART_FILENAME_PATTERN = /\.discasa\.part\d+$/i;
 let botClient: Client | null = null;
 let botClientReadyPromise: Promise<Client> | null = null;
 let discordWriteQueueTail: Promise<void> = Promise.resolve();
@@ -141,12 +120,6 @@ async function enqueueDiscordWrite<T>(operation: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return queued;
-}
-
-function hasChunkedStorage(
-  item: Pick<LibraryItemIndex, "storageManifest">,
-): item is Pick<LibraryItemIndex, "storageManifest"> & { storageManifest: LibraryItemStorageManifest } {
-  return item.storageManifest?.mode === "chunked";
 }
 
 export async function getDiscordUploadLimitForGuild(guildId: string): Promise<number> {
@@ -245,93 +218,6 @@ export async function getDiscordBotRuntimeStatus(): Promise<{
   };
 }
 
-async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserGuild[]> {
-  const endpoint = "https://discord.com/api/v10/users/@me/guilds";
-  let response: Response;
-
-  try {
-    response = await fetch(endpoint, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-  } catch (error) {
-    console.error("[Discord API] Network failure while fetching user guilds.", {
-      endpoint,
-      error,
-    });
-    throw new Error("Failed to reach Discord while fetching the user guild list.");
-  }
-
-  const rawBody = await response.text();
-
-  let parsedBody: unknown = null;
-  if (rawBody.trim().length > 0) {
-    try {
-      parsedBody = JSON.parse(rawBody) as unknown;
-    } catch {
-      parsedBody = rawBody;
-    }
-  }
-
-  if (!response.ok) {
-    const logPayload = {
-      endpoint,
-      status: response.status,
-      statusText: response.statusText,
-      body: parsedBody,
-    };
-
-    if (response.status === 401 || response.status === 403) {
-      console.warn("[Discord API] Stored Discord user token is no longer valid.", logPayload);
-      throw new DiscordAuthorizationError("Discord login expired. Please login again.", response.status);
-    }
-
-    console.error("[Discord API] Failed to fetch user guilds.", logPayload);
-
-    throw new Error(
-      `Failed to fetch the user guild list from Discord (${response.status} ${response.statusText}).`,
-    );
-  }
-
-  if (!Array.isArray(parsedBody)) {
-    throw new Error("Discord returned an unexpected guild list payload.");
-  }
-
-  return parsedBody as DiscordUserGuild[];
-}
-
-function hasManageAccess(permissions: string): boolean {
-  const resolved = BigInt(permissions || "0");
-  const admin = BigInt(PermissionsBitField.Flags.Administrator.toString());
-  const manageGuild = BigInt(PermissionsBitField.Flags.ManageGuild.toString());
-  const manageChannels = BigInt(PermissionsBitField.Flags.ManageChannels.toString());
-  return (resolved & admin) !== 0n || (resolved & manageGuild) !== 0n || (resolved & manageChannels) !== 0n;
-}
-
-function getPermissionLabels(permissions: string, owner: boolean): string[] {
-  const labels: string[] = [];
-  const resolved = BigInt(permissions || "0");
-
-  if (owner) {
-    labels.push("OWNER");
-  }
-
-  if ((resolved & BigInt(PermissionsBitField.Flags.Administrator.toString())) !== 0n) {
-    labels.push("ADMINISTRATOR");
-  }
-
-  if ((resolved & BigInt(PermissionsBitField.Flags.ManageGuild.toString())) !== 0n) {
-    labels.push("MANAGE_GUILD");
-  }
-
-  if ((resolved & BigInt(PermissionsBitField.Flags.ManageChannels.toString())) !== 0n) {
-    labels.push("MANAGE_CHANNELS");
-  }
-
-  return labels;
-}
-
 async function resolveAuthenticatedUserOverwrite(guild: Guild, authenticatedUserId?: string): Promise<OverwriteResolvable | null> {
   if (!authenticatedUserId) {
     return null;
@@ -413,16 +299,6 @@ async function deleteDiscordMessage(channelId: string, messageId: string): Promi
   }
 }
 
-async function downloadAttachmentBuffer(attachmentUrl: string): Promise<Buffer> {
-  const response = await fetch(attachmentUrl);
-
-  if (!response.ok) {
-    throw new Error("Failed to download the stored Discord attachment.");
-  }
-
-  return Buffer.from(await response.arrayBuffer());
-}
-
 async function sendBufferToChannel(
   channelId: string,
   fileName: string,
@@ -480,130 +356,6 @@ function getAttachmentPointerFromMessage(
     messageId: message.id,
     attachmentUrl: attachment.url,
   };
-}
-
-type KnownDriveAttachmentIndex = {
-  messageAttachmentKeys: Set<string>;
-  attachmentUrls: Set<string>;
-};
-
-function getStorageMessageKey(channelId?: string, messageId?: string): string | null {
-  if (!channelId || !messageId) {
-    return null;
-  }
-
-  return `${channelId}:${messageId}`;
-}
-
-function getStorageMessageAttachmentKey(
-  channelId: string | undefined,
-  messageId: string | undefined,
-  fileName: string | undefined,
-  fileSize: number | undefined,
-): string | null {
-  const messageKey = getStorageMessageKey(channelId, messageId);
-
-  if (!messageKey || !fileName || typeof fileSize !== "number") {
-    return null;
-  }
-
-  return `${messageKey}:${fileName}:${fileSize}`;
-}
-
-function addKnownStorageReference(
-  index: KnownDriveAttachmentIndex,
-  reference: {
-    fileName?: string;
-    fileSize?: number;
-    attachmentUrl?: string;
-    storageChannelId?: string;
-    storageMessageId?: string;
-    storageManifest?: LibraryItemStorageManifest | null;
-  },
-): void {
-  const messageAttachmentKey = getStorageMessageAttachmentKey(
-    reference.storageChannelId,
-    reference.storageMessageId,
-    reference.fileName,
-    reference.fileSize,
-  );
-
-  if (messageAttachmentKey) {
-    index.messageAttachmentKeys.add(messageAttachmentKey);
-  }
-
-  if (reference.attachmentUrl) {
-    index.attachmentUrls.add(reference.attachmentUrl);
-  }
-
-  if (reference.storageManifest?.mode === "chunked") {
-    for (const part of reference.storageManifest.parts) {
-      const partMessageAttachmentKey = getStorageMessageAttachmentKey(
-        part.storageChannelId,
-        part.storageMessageId,
-        part.fileName,
-        part.size,
-      );
-
-      if (partMessageAttachmentKey) {
-        index.messageAttachmentKeys.add(partMessageAttachmentKey);
-      }
-
-      index.attachmentUrls.add(part.attachmentUrl);
-    }
-  }
-}
-
-function createKnownDriveAttachmentIndex(items: LibraryItemIndex[]): KnownDriveAttachmentIndex {
-  const index: KnownDriveAttachmentIndex = {
-    messageAttachmentKeys: new Set(),
-    attachmentUrls: new Set(),
-  };
-
-  for (const item of items) {
-    addKnownStorageReference(index, {
-      ...item,
-      fileName: item.name,
-      fileSize: item.size,
-    });
-
-    if (item.originalSource) {
-      addKnownStorageReference(index, item.originalSource);
-    }
-  }
-
-  return index;
-}
-
-function isDiscasaManagedDriveAttachment(fileName: string): boolean {
-  return (
-    DISCASA_CHUNK_PART_FILENAME_PATTERN.test(fileName) ||
-    fileName === INDEX_SNAPSHOT_FILENAME ||
-    fileName === LEGACY_INDEX_SNAPSHOT_FILENAME ||
-    fileName === FOLDER_SNAPSHOT_FILENAME ||
-    fileName === CONFIG_SNAPSHOT_FILENAME ||
-    fileName === INSTALL_MARKER_FILENAME
-  );
-}
-
-function isKnownDriveAttachment(
-  context: ActiveStorageContext,
-  message: Message<boolean>,
-  attachment: Attachment,
-  known: KnownDriveAttachmentIndex,
-): boolean {
-  const messageAttachmentKey = getStorageMessageAttachmentKey(
-    context.driveChannelId,
-    message.id,
-    attachment.name ?? undefined,
-    attachment.size,
-  );
-
-  return Boolean(
-    (messageAttachmentKey && known.messageAttachmentKeys.has(messageAttachmentKey)) ||
-      known.attachmentUrls.has(attachment.url) ||
-      (attachment.proxyURL ? known.attachmentUrls.has(attachment.proxyURL) : false),
-  );
 }
 
 function toUploadedFileRecordFromAttachment(
@@ -688,108 +440,50 @@ async function findAttachmentInChannelHistory(
   }
 }
 
-async function findMessageForItem(
-  context: ActiveStorageContext,
-  item: Pick<LibraryItemIndex, "name" | "attachmentUrl" | "storageChannelId" | "isTrashed">,
-): Promise<{ channelId: string; message: Message<boolean>; attachmentUrl: string } | null> {
-  const client = await getBotClient();
-  const botUserId = client?.user?.id ?? null;
-  const candidateChannelIds = [
-    item.storageChannelId,
-    item.isTrashed ? context.trashChannelId : context.driveChannelId,
-    context.driveChannelId,
-    context.trashChannelId,
-  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
-
-  for (const channelId of candidateChannelIds) {
-    let locatedAttachment: StoredAttachmentPointer | null = null;
-
-    try {
-      locatedAttachment = await findAttachmentInChannelHistory(channelId, {
-        preferredFileName: item.name,
-        currentAttachmentUrl: item.attachmentUrl,
-        botUserId,
-      });
-    } catch (error) {
-      if (error instanceof DiscordStorageUnavailableError) {
-        console.warn(`[Discasa recovery] Skipping unavailable storage channel ${channelId} while relinking "${item.name}".`);
-        continue;
-      }
-
-      throw error;
-    }
-
-    if (!locatedAttachment) {
-      continue;
-    }
-
-    try {
-      const channel = await getGuildTextChannel(locatedAttachment.channelId);
-      const message = await channel.messages.fetch(locatedAttachment.messageId);
-      return {
-        channelId: locatedAttachment.channelId,
-        message,
-        attachmentUrl: locatedAttachment.attachmentUrl,
-      };
-    } catch {
-      // Continue with the next channel candidate.
-    }
+export async function resolveAttachmentReference(
+  request: AttachmentReferenceRequest,
+): Promise<AttachmentReferenceResolution | null> {
+  if (env.mockMode) {
+    return null;
   }
 
-  return null;
-}
+  if (request.storageChannelId && request.storageMessageId) {
+    const directAttachment = await fetchMessageAttachmentByReference(
+      request.storageChannelId,
+      request.storageMessageId,
+      request.preferredFileName,
+    );
 
-async function resolveStoredMessage(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-): Promise<{ channelId: string; messageId: string; attachmentUrl: string }> {
-  if (item.storageChannelId && item.storageMessageId) {
-    const directAttachment = await fetchMessageAttachmentByReference(item.storageChannelId, item.storageMessageId, item.name);
     if (directAttachment) {
-      return directAttachment;
+      return {
+        ...directAttachment,
+        method: "message-reference",
+      };
     }
   }
 
-  const located = await findMessageForItem(context, item);
-  if (!located) {
-    throw new Error(`Could not locate the Discord message for "${item.name}".`);
-  }
-
-  return {
-    channelId: located.channelId,
-    messageId: located.message.id,
-    attachmentUrl: located.attachmentUrl,
-  };
-}
-
-async function findAttachmentForStoragePart(
-  context: ActiveStorageContext,
-  item: Pick<LibraryItemIndex, "name" | "isTrashed">,
-  part: LibraryItemStoragePart,
-): Promise<StoredAttachmentPointer | null> {
   const client = await getBotClient();
-  const botUserId = client?.user?.id ?? null;
-  const candidateChannelIds = [
-    part.storageChannelId,
-    item.isTrashed ? context.trashChannelId : context.driveChannelId,
-    context.driveChannelId,
-    context.trashChannelId,
-  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  const botUserId = request.botAuthoredOnly === false ? null : client?.user?.id ?? null;
+  const candidateChannelIds = request.candidateChannelIds.filter(
+    (value, index, all) => Boolean(value) && all.indexOf(value) === index,
+  );
 
   for (const channelId of candidateChannelIds) {
     try {
-      const locatedAttachment = await findAttachmentInChannelHistory(channelId, {
-        preferredFileName: part.fileName,
-        currentAttachmentUrl: part.attachmentUrl,
+      const fallbackAttachment = await findAttachmentInChannelHistory(channelId, {
+        preferredFileName: request.preferredFileName,
+        currentAttachmentUrl: request.currentAttachmentUrl,
         botUserId,
       });
 
-      if (locatedAttachment) {
-        return locatedAttachment;
+      if (fallbackAttachment) {
+        return {
+          ...fallbackAttachment,
+          method: "history-scan",
+        };
       }
     } catch (error) {
       if (error instanceof DiscordStorageUnavailableError) {
-        console.warn(`[Discasa recovery] Skipping unavailable storage channel ${channelId} while relinking "${item.name}" chunk ${part.index + 1}.`);
         continue;
       }
 
@@ -798,80 +492,6 @@ async function findAttachmentForStoragePart(
   }
 
   return null;
-}
-
-async function resolveStoredPart(
-  context: ActiveStorageContext,
-  item: Pick<LibraryItemIndex, "name" | "isTrashed">,
-  part: LibraryItemStoragePart,
-): Promise<StoredAttachmentPointer> {
-  const directAttachment = await fetchMessageAttachmentByReference(part.storageChannelId, part.storageMessageId, part.fileName);
-  if (directAttachment) {
-    return directAttachment;
-  }
-
-  const fallbackAttachment = await findAttachmentForStoragePart(context, item, part);
-  if (!fallbackAttachment) {
-    throw new Error(`Could not locate chunk ${part.index + 1} for "${item.name}".`);
-  }
-
-  return fallbackAttachment;
-}
-
-async function resolveChunkedManifest(
-  context: ActiveStorageContext,
-  item: LibraryItemIndex,
-): Promise<LibraryItemStorageManifest> {
-  if (!hasChunkedStorage(item)) {
-    throw new Error(`"${item.name}" is not stored as a chunked file.`);
-  }
-
-  const parts: LibraryItemStoragePart[] = [];
-
-  for (const part of item.storageManifest.parts) {
-    const resolved = await resolveStoredPart(context, item, part);
-    parts.push({
-      ...part,
-      attachmentUrl: resolved.attachmentUrl,
-      storageChannelId: resolved.channelId,
-      storageMessageId: resolved.messageId,
-    });
-  }
-
-  return {
-    ...item.storageManifest,
-    parts,
-  };
-}
-
-async function transferItemBetweenChannels(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  targetChannelId: string,
-): Promise<UploadedFileRecord> {
-  if (hasChunkedStorage(item)) {
-    throw new Error("Chunked file movement is coordinated by the Discasa app service.");
-  }
-
-  const source = await resolveStoredMessage(context, item);
-
-  if (source.channelId === targetChannelId) {
-    return {
-      fileName: item.name,
-      fileSize: item.size,
-      mimeType: item.mimeType,
-      guildId: context.guildId,
-      attachmentUrl: source.attachmentUrl,
-      storageChannelId: source.channelId,
-      storageMessageId: source.messageId,
-      storageManifest: null,
-    };
-  }
-
-  const fileBuffer = await downloadAttachmentBuffer(source.attachmentUrl);
-  const moved = await sendBufferToChannel(targetChannelId, item.name, fileBuffer, item.mimeType, context.guildId);
-  await deleteDiscordMessage(source.channelId, source.messageId);
-  return moved;
 }
 
 function isIndexSnapshot(raw: unknown): raw is PersistedIndexSnapshot {
@@ -1222,234 +842,6 @@ async function migrateLegacyMetadataSnapshots(
   }
 }
 
-function buildRelinkWarning(
-  item: Pick<LibraryItemIndex, "id" | "name" | "isTrashed">,
-  reason: string,
-): DiscasaAttachmentRecoveryWarning {
-  return {
-    itemId: item.id,
-    itemName: item.name,
-    storageState: item.isTrashed ? "trash" : "drive",
-    reason,
-  };
-}
-
-async function resolveCurrentAttachment(
-  context: ActiveStorageContext,
-  item: LibraryItemIndex,
-): Promise<AttachmentResolution | { reason: string }> {
-  if (hasChunkedStorage(item)) {
-    try {
-      const storageManifest = await resolveChunkedManifest(context, item);
-      const firstPart = storageManifest.parts[0];
-      if (!firstPart) {
-        return {
-          reason: "Stored chunk manifest has no parts.",
-        };
-      }
-
-      return {
-        attachmentUrl: firstPart.attachmentUrl,
-        storageChannelId: firstPart.storageChannelId,
-        storageMessageId: firstPart.storageMessageId,
-        storageManifest,
-        method: "message-reference",
-      };
-    } catch (error) {
-      return {
-        reason: error instanceof Error ? error.message : "Stored chunk manifest could not be resolved.",
-      };
-    }
-  }
-
-  if (item.storageChannelId && item.storageMessageId) {
-    const directAttachment = await fetchMessageAttachmentByReference(item.storageChannelId, item.storageMessageId, item.name);
-    if (directAttachment) {
-      return {
-        attachmentUrl: directAttachment.attachmentUrl,
-        storageChannelId: directAttachment.channelId,
-        storageMessageId: directAttachment.messageId,
-        storageManifest: null,
-        method: "message-reference",
-      };
-    }
-  }
-
-  const fallbackMessage = await findMessageForItem(context, item);
-  if (fallbackMessage) {
-    return {
-      attachmentUrl: fallbackMessage.attachmentUrl,
-      storageChannelId: fallbackMessage.channelId,
-      storageMessageId: fallbackMessage.message.id,
-      storageManifest: null,
-      method: "history-scan",
-    };
-  }
-
-  if (!item.storageChannelId || !item.storageMessageId) {
-    return {
-      reason: "Stored Discord message metadata is missing, and the file was not found by fallback history scan.",
-    };
-  }
-
-  return {
-    reason: "Stored Discord message could not be resolved, and the file was not found by fallback history scan.",
-  };
-}
-
-function didStoragePartChange(left: LibraryItemStoragePart, right: LibraryItemStoragePart): boolean {
-  return (
-    left.attachmentUrl !== right.attachmentUrl ||
-    left.storageChannelId !== right.storageChannelId ||
-    left.storageMessageId !== right.storageMessageId
-  );
-}
-
-function didStorageManifestChange(
-  current: LibraryItemStorageManifest | null | undefined,
-  resolved: LibraryItemStorageManifest | null | undefined,
-): boolean {
-  if (!current && !resolved) {
-    return false;
-  }
-
-  if (!current || !resolved || current.parts.length !== resolved.parts.length) {
-    return true;
-  }
-
-  return resolved.parts.some((part, index) => didStoragePartChange(current.parts[index], part));
-}
-
-function didAttachmentPointerChange(item: LibraryItemIndex, resolved: AttachmentResolution): boolean {
-  return (
-    item.attachmentUrl !== resolved.attachmentUrl ||
-    item.storageChannelId !== resolved.storageChannelId ||
-    item.storageMessageId !== resolved.storageMessageId ||
-    didStorageManifestChange(item.storageManifest, resolved.storageManifest) ||
-    item.attachmentStatus === "missing"
-  );
-}
-
-export async function refreshIndexSnapshotAttachmentUrls(
-  context: ActiveStorageContext,
-  snapshot: PersistedIndexSnapshot,
-): Promise<RefreshIndexSnapshotResult> {
-  if (env.mockMode || snapshot.items.length === 0) {
-    return {
-      snapshot,
-      relinkedItemCount: 0,
-      unresolvedItems: [],
-      didChange: false,
-    };
-  }
-
-  console.info(
-    `[Discasa recovery] Starting attachment relink for ${snapshot.items.length} indexed item(s) in guild ${context.guildName} (${context.guildId}).`,
-  );
-
-  const nextItems: LibraryItemIndex[] = [];
-  const unresolvedItems: DiscasaAttachmentRecoveryWarning[] = [];
-  const checkedItemCount = snapshot.items.length;
-  let relinkedItemCount = 0;
-  let didChange = false;
-
-  for (const item of snapshot.items) {
-    const resolution = await resolveCurrentAttachment(context, item);
-
-    if ("reason" in resolution) {
-      const warning = buildRelinkWarning(item, resolution.reason);
-      unresolvedItems.push(warning);
-
-      const nextItem: LibraryItemIndex = {
-        ...item,
-        attachmentStatus: "missing",
-      };
-
-      if (item.attachmentStatus !== "missing") {
-        didChange = true;
-      }
-
-      nextItems.push(nextItem);
-      console.warn(
-        `[Discasa recovery] Could not relink "${item.name}" (${item.id}). ${resolution.reason}`,
-      );
-      continue;
-    }
-
-    const nextItem: LibraryItemIndex = {
-      ...item,
-      guildId: context.guildId,
-      attachmentUrl: resolution.attachmentUrl,
-      attachmentStatus: "ready",
-      storageChannelId: resolution.storageChannelId,
-      storageMessageId: resolution.storageMessageId,
-      storageManifest: resolution.storageManifest ?? null,
-    };
-
-    if (didAttachmentPointerChange(item, resolution)) {
-      relinkedItemCount += 1;
-      didChange = true;
-      console.info(
-        `[Discasa recovery] Relinked "${item.name}" (${item.id}) via ${resolution.method}.`,
-      );
-    }
-
-    nextItems.push(nextItem);
-  }
-
-  const alreadyValidItemCount = checkedItemCount - relinkedItemCount - unresolvedItems.length;
-
-  console.info(
-    `[Discasa recovery] Summary | Checked: ${checkedItemCount} | Relinked: ${relinkedItemCount} | Already valid: ${alreadyValidItemCount} | Unresolved: ${unresolvedItems.length}`,
-  );
-
-  return {
-    snapshot: {
-      version: 2,
-      updatedAt: didChange ? new Date().toISOString() : snapshot.updatedAt,
-      items: nextItems,
-    },
-    relinkedItemCount,
-    unresolvedItems,
-    didChange,
-  };
-}
-
-export async function listEligibleGuilds(accessToken?: string): Promise<GuildSummary[]> {
-  if (env.mockMode) {
-    return [
-      {
-        id: "guild_1",
-        name: "Discasa Server",
-        owner: true,
-        permissions: ["ADMINISTRATOR"],
-      },
-      {
-        id: "guild_2",
-        name: "Archive Lab",
-        owner: false,
-        permissions: ["MANAGE_GUILD", "MANAGE_CHANNELS"],
-      },
-    ];
-  }
-
-  if (!accessToken) {
-    return [];
-  }
-
-  const guilds = await fetchDiscordUserGuilds(accessToken);
-
-  return guilds
-    .filter((guild) => guild.owner || hasManageAccess(guild.permissions))
-    .sort((left, right) => left.name.localeCompare(right.name))
-    .map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      owner: guild.owner,
-      permissions: getPermissionLabels(guild.permissions, guild.owner),
-    }));
-}
-
 export async function inspectDiscasaSetup(guildId: string): Promise<DiscasaSetupStatus> {
   if (env.mockMode) {
     return {
@@ -1611,68 +1003,41 @@ export async function uploadFilesToDiscordDrive(
   return uploadFilesToDiscordChannel(files, context, context.driveChannelId);
 }
 
-export async function scanDiscordDriveForNewFiles(
+export async function listDiscordDriveAttachments(
   context: ActiveStorageContext,
-  knownItems: LibraryItemIndex[],
-): Promise<DiscordDriveScanResult> {
+  beforeMessageId?: string,
+): Promise<DiscordDriveAttachmentPage> {
   if (env.mockMode) {
     return {
       records: [],
       scannedAttachmentCount: 0,
-      skippedAttachmentCount: 0,
-      skippedGroupedMessageCount: 0,
     };
   }
 
   const channel = await getGuildTextChannel(context.driveChannelId);
-  const known = createKnownDriveAttachmentIndex(knownItems);
-  const records: UploadedFileRecord[] = [];
+  const records: DiscordDriveAttachmentRecord[] = [];
   let scannedAttachmentCount = 0;
-  let skippedAttachmentCount = 0;
-  let skippedGroupedMessageCount = 0;
-  let beforeMessageId: string | undefined;
 
-  while (true) {
-    const messages = await channel.messages.fetch(beforeMessageId ? { limit: 100, before: beforeMessageId } : { limit: 100 });
+  const messages = await channel.messages.fetch(beforeMessageId ? { limit: 100, before: beforeMessageId } : { limit: 100 });
 
-    if (messages.size === 0) {
-      break;
+  for (const message of messages.values()) {
+    const attachments = [...message.attachments.values()];
+    scannedAttachmentCount += attachments.length;
+
+    for (const attachment of attachments) {
+      records.push({
+        ...toUploadedFileRecordFromAttachment(context, message, attachment),
+        proxyUrl: attachment.proxyURL,
+      });
     }
-
-    for (const message of messages.values()) {
-      const attachments = [...message.attachments.values()];
-
-      if (attachments.length === 0) {
-        continue;
-      }
-
-      scannedAttachmentCount += attachments.length;
-
-      for (const attachment of attachments) {
-        const fileName = attachment.name ?? "discord-file";
-
-        if (isDiscasaManagedDriveAttachment(fileName) || isKnownDriveAttachment(context, message, attachment, known)) {
-          skippedAttachmentCount += 1;
-          continue;
-        }
-
-        records.push(toUploadedFileRecordFromAttachment(context, message, attachment));
-      }
-    }
-
-    const oldestMessage = [...messages.values()].at(-1);
-    if (!oldestMessage || messages.size < 100) {
-      break;
-    }
-
-    beforeMessageId = oldestMessage.id;
   }
+
+  const oldestMessage = [...messages.values()].at(-1);
 
   return {
     records,
     scannedAttachmentCount,
-    skippedAttachmentCount,
-    skippedGroupedMessageCount,
+    nextBeforeMessageId: oldestMessage && messages.size >= 100 ? oldestMessage.id : undefined,
   };
 }
 
@@ -1915,37 +1280,4 @@ export async function syncConfigSnapshot(
     "Discasa config snapshot",
     [CONFIG_SNAPSHOT_FILENAME],
   );
-}
-
-export async function moveStoredItemToTrash(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-): Promise<UploadedFileRecord> {
-  return transferItemBetweenChannels(context, item, context.trashChannelId);
-}
-
-export async function restoreStoredItemFromTrash(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-): Promise<UploadedFileRecord> {
-  return transferItemBetweenChannels(context, item, context.driveChannelId);
-}
-
-export async function deleteStoredItemFromDiscord(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-): Promise<void> {
-  if (hasChunkedStorage(item)) {
-    await deleteStorageMessagesFromDiscord(
-      context,
-      item.storageManifest.parts.map((part) => ({
-        channelId: part.storageChannelId,
-        messageId: part.storageMessageId,
-      })),
-    );
-    return;
-  }
-
-  const source = await resolveStoredMessage(context, item);
-  await deleteDiscordMessage(source.channelId, source.messageId);
 }

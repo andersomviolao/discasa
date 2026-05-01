@@ -1,14 +1,12 @@
 import express from "express";
 import multer from "multer";
 import type {
-  LibraryItem,
   PersistedConfigSnapshot,
   PersistedFolderSnapshot,
   PersistedIndexSnapshot,
 } from "@discasa/shared";
 import {
   deleteStorageMessagesFromDiscord,
-  deleteStoredItemFromDiscord,
   getDiscordBotRuntimeStatus,
   getDiscordUploadLimitForGuild,
   hasCurrentConfigSnapshot,
@@ -16,13 +14,11 @@ import {
   hasCurrentIndexSnapshot,
   initializeDiscasaInGuild,
   inspectDiscasaSetup,
-  moveStoredItemToTrash,
+  listDiscordDriveAttachments,
   readLatestConfigSnapshot,
   readLatestFolderSnapshot,
   readLatestIndexSnapshot,
-  refreshIndexSnapshotAttachmentUrls,
-  restoreStoredItemFromTrash,
-  scanDiscordDriveForNewFiles,
+  resolveAttachmentReference,
   syncConfigSnapshot,
   syncFolderSnapshot,
   syncIndexSnapshot,
@@ -50,14 +46,6 @@ function readMultipartContext(raw: unknown): ActiveStorageContext {
   }
 
   return readContext(JSON.parse(raw) as unknown);
-}
-
-function readItem(raw: unknown): LibraryItem {
-  if (!raw || typeof raw !== "object") {
-    throw new Error("Library item is required.");
-  }
-
-  return raw as LibraryItem;
 }
 
 app.get("/health", async (_request, response, next) => {
@@ -138,42 +126,23 @@ app.post("/files/delete-messages", async (request, response, next) => {
   }
 });
 
-app.post("/files/move-to-trash", async (request, response, next) => {
+app.post("/files/drive/attachments", async (request, response, next) => {
   try {
-    response.json({
-      record: await moveStoredItemToTrash(readContext(request.body.context), readItem(request.body.item)),
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/files/restore-from-trash", async (request, response, next) => {
-  try {
-    response.json({
-      record: await restoreStoredItemFromTrash(readContext(request.body.context), readItem(request.body.item)),
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/files/delete", async (request, response, next) => {
-  try {
-    await deleteStoredItemFromDiscord(readContext(request.body.context), readItem(request.body.item));
-    response.json({ deleted: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/files/drive/scan", async (request, response, next) => {
-  try {
-    const rawItems = Array.isArray(request.body.knownItems) ? request.body.knownItems : [];
-    response.json(await scanDiscordDriveForNewFiles(
+    const beforeMessageId = typeof request.body.beforeMessageId === "string" ? request.body.beforeMessageId : undefined;
+    response.json(await listDiscordDriveAttachments(
       readContext(request.body.context),
-      rawItems as PersistedIndexSnapshot["items"],
+      beforeMessageId,
     ));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/files/resolve-attachment", async (request, response, next) => {
+  try {
+    response.json({
+      resolution: await resolveAttachmentReference(request.body.reference),
+    });
   } catch (error) {
     next(error);
   }
@@ -222,17 +191,6 @@ app.post("/snapshots/folder/latest", async (request, response, next) => {
 app.post("/snapshots/config/latest", async (request, response, next) => {
   try {
     response.json({ snapshot: await readLatestConfigSnapshot(readContext(request.body.context)) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/snapshots/index/refresh-attachments", async (request, response, next) => {
-  try {
-    response.json(await refreshIndexSnapshotAttachmentUrls(
-      readContext(request.body.context),
-      request.body.snapshot as PersistedIndexSnapshot,
-    ));
   } catch (error) {
     next(error);
   }

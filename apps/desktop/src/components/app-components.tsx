@@ -27,8 +27,7 @@ import type {
   SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
 import { DISCASA_CHANNELS } from "@discasa/shared";
-import defaultAvatarUrl from "../assets/discasa-default-avatar.png";
-import { supportedLanguages, type InterfaceLanguage } from "../i18n";
+import { supportedLanguages, type InterfaceLanguage } from "../i18n/index.ts";
 import {
   clampNumber,
   commitMouseWheelBehavior,
@@ -57,8 +56,9 @@ import {
   type ViewerDraftState,
   type ViewerState,
   type WindowState,
-} from "../lib/app-logic";
+} from "../lib/app-logic.ts";
 
+const defaultAvatarUrl = "./discasa-default-avatar.png";
 const AUTH_APPLY_PROGRESS_STEP_MS = 1700;
 const AUTH_APPLY_PROGRESS_STEPS = [
   {

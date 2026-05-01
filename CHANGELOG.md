@@ -2,6 +2,13 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-vite-path-hotfix]
+
+### Fixed
+
+- Fixed the desktop dev/build frontend failing to resolve `/src/main.tsx` when the repository path contains `#`.
+- Moved runtime desktop images and fonts to public assets so Vite does not parse them through the problematic encoded path.
+
 ## [2026-05-01-library-automation]
 
 ### Added

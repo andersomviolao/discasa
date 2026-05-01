@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "identifier": "com.andersomviolao.discasa",
   "build": {
-    "beforeDevCommand": "npm run dev --workspace @discasa/desktop",
-    "beforeBuildCommand": "npm run build --workspace @discasa/desktop",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },

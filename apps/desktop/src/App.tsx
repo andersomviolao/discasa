@@ -33,8 +33,6 @@ import {
   type LocalStorageStatus,
   type SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
-import logoUrl from "./assets/discasa-logo.png";
-import defaultAvatarUrl from "./assets/discasa-default-avatar.png";
 import "./styles.css";
 import {
   applyInterfaceLanguage,
@@ -42,7 +40,7 @@ import {
   supportedLanguages,
   writeStoredLanguage,
   type InterfaceLanguage,
-} from "./i18n";
+} from "./i18n/index.ts";
 import {
   logoutDiscord,
   createAlbum,
@@ -113,7 +111,7 @@ import {
   type ViewerDraftState,
   type ViewerState,
   type WindowState,
-} from "./lib/app-logic";
+} from "./lib/app-logic.ts";
 import {
   AlbumContextMenu,
   AlbumModal,
@@ -129,8 +127,10 @@ import {
   Sidebar,
   StatusToast,
   Titlebar,
-} from "./components/app-components";
+} from "./components/app-components.tsx";
 
+const logoUrl = "./discasa-logo.png";
+const defaultAvatarUrl = "./discasa-default-avatar.png";
 const PENDING_UPLOAD_ID_PREFIX = "pending-upload:";
 
 type PendingUploadItem = LibraryItem & {

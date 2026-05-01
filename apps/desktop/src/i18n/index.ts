@@ -1,5 +1,5 @@
-import { enTranslations } from "./en";
-import { ptTranslations } from "./pt";
+import { enTranslations } from "./en.ts";
+import { ptTranslations } from "./pt.ts";
 
 export type InterfaceLanguage = "en" | "pt";
 

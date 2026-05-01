@@ -1,75 +1,149 @@
-# Discasa Coordinator Documentation
+# Discasa App Documentation
 
-This repository coordinates the local Discasa workspace after the app and bot were extracted into standalone repositories.
+This document covers the standalone Discasa desktop app repository.
 
-## 1. Local Workspace
+## 1. Purpose
 
-Use this sibling layout:
+Discasa App is the local product surface for Discasa. It owns the desktop interface, local backend, synchronization decisions, pending upload previews, cache, thumbnails, settings, and runtime localization.
 
-```text
-F:\scripts
-  Discasa
-  Discasa_app
-  Discasa_bot
-```
+The hosted Discord bot lives in `..\Discasa_bot` and acts as a compact HTTP adapter for Discord operations that require bot identity.
 
-The coordinator launchers resolve paths relative to this repository and then start the app and bot from their own roots.
-
-## 2. Repositories
-
-### Discasa_app
-
-Public repository:
+## 2. Repository Layout
 
 ```text
-https://github.com/Discasa/Discasa_app
+Discasa
+  apps/desktop
+    src/App.tsx
+    src/components
+    src/i18n
+    src/lib
+    src-tauri
+  apps/server
+    src
+  packages/shared
+    src
+  art
+    app
+    fonts
+    scripts
+    sources
 ```
 
-Contains:
+## 3. App Responsibilities
 
-- Tauri and React desktop interface;
-- local Node.js backend;
-- shared TypeScript contracts;
-- app-specific artwork and generation scripts;
-- English and Portuguese runtime translations;
-- app-only documentation and launchers.
+- Discord OAuth and setup flow.
+- Local API used by the desktop interface.
+- Library, folder, trash, restore, and delete flows.
+- Fixed `10 MiB` upload limit enforcement.
+- Large-file chunking and manifest creation.
+- Live pending previews while uploads are still processing.
+- Recovery for interrupted local-path uploads.
+- Snapshot creation, hydration, recovery, and URL relinking.
+- Automatic import from `discasa-drive` and optional local mirror folders.
+- Local file and thumbnail cache.
+- Runtime language switching between English and Portuguese.
+- App and bot diagnostics in Settings.
 
-### Discasa_bot
+## 4. Bot Boundary
 
-Public repository:
+The app calls the bot through `DISCORD_BOT_URL`, usually:
 
 ```text
-https://github.com/Discasa/Discasa_bot
+http://localhost:3002
 ```
 
-Contains:
+The bot should remain a hosted Discord adapter. Product rules should stay in the app whenever possible.
 
-- hosted Discord bot HTTP service;
-- Discord setup, upload, deletion, resolve, and snapshot endpoints;
-- bot-specific artwork and documentation.
+## 5. Discord Storage
 
-## 3. Coordinator Scripts
+Discasa creates or reuses:
 
 ```text
-start-all.bat   Start Discasa_app and Discasa_bot
-stop-all.bat    Stop app and bot development ports
-start-app.bat   Start sibling Discasa_app
-stop-app.bat    Stop app development ports
-start-bot.bat   Start sibling Discasa_bot
-stop-bot.bat    Stop bot development port
-hard-reset.bat  Delegate to ..\Discasa_app\hard-reset.bat
+Discasa
+  #discasa-drive
+  #discasa-index
+  #discasa-trash
 ```
 
-## 4. Development Ports
+- `discasa-drive`: active files and chunk parts.
+- `discasa-index`: index, folder, config, and installation snapshots.
+- `discasa-trash`: trashed items.
 
-- `3001`: local app backend.
-- `3002`: bot service.
-- `1420`: Tauri/Vite desktop.
-- `5173`: alternate Vite port in some scenarios.
+## 6. Upload Flow
 
-## 5. Maintenance
+1. The user selects or drops files.
+2. Tauri sends native local paths to `/api/upload-local`.
+3. The UI creates pending items immediately.
+4. The user can favorite, move, or trash pending items while upload continues.
+5. The backend chunks files larger than `10 MiB`.
+6. The bot uploads each attachment or chunk to Discord.
+7. The app reconciles the final item with the pending id.
+8. Snapshots and caches are updated.
 
-- Keep app code in `Discasa_app`.
-- Keep bot code in `Discasa_bot`.
-- Keep this coordinator small and focused on workspace-level scripts and notes.
-- Update sibling repository links when remotes change.
+Pending upload records are stored outside the normal library cache so interrupted previews cannot become permanent ghost files.
+
+## 7. Localization
+
+Runtime translation files live in:
+
+```text
+apps/desktop/src/i18n
+  en.ts
+  pt.ts
+  index.ts
+```
+
+Language is stored in `DiscasaConfig.language`. Changing the setting applies immediately without restarting the app.
+
+## 8. Development
+
+Install:
+
+```powershell
+npm install
+copy .env.example .env
+```
+
+Run app only:
+
+```powershell
+.\start-app.bat
+```
+
+Run with the sibling bot:
+
+```powershell
+.\start-all.bat
+```
+
+Validate:
+
+```powershell
+npm run check
+npm run build:desktop
+npm run build:server
+```
+
+## 9. Local Data
+
+On Windows, Discasa uses:
+
+```text
+%APPDATA%\Discasa
+%LOCALAPPDATA%\Discasa\Cache
+```
+
+Legacy Tauri paths may also exist under:
+
+```text
+%APPDATA%\com.andersomviolao.discasa
+%LOCALAPPDATA%\com.andersomviolao.discasa
+```
+
+## 10. Maintenance Guidelines
+
+- Keep the app repository responsible for user-facing behavior and state decisions.
+- Keep the bot repository small and suitable for online hosting.
+- Keep app artwork under `art`.
+- Keep translations in sync when interface text changes.
+- Validate desktop and server checks before pushing.

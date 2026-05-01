@@ -1,54 +1,83 @@
-# Discasa
+# Discasa App
 
-Discasa is now split into standalone repositories:
+Discasa App is the desktop application for Discasa. It provides the Tauri, React, and local backend experience that turns a Discord server into a private file and media library.
 
-- [Discasa_app](https://github.com/Discasa/Discasa_app): desktop app, local backend, shared contracts, and app artwork.
-- [Discasa_bot](https://github.com/Discasa/Discasa_bot): hosted Discord bot service.
+The hosted Discord bot is maintained separately in the sibling `Discasa_bot` repository. This app talks to that service through `DISCORD_BOT_URL`.
 
-This repository is the lightweight coordinator for local development. It keeps shared project documentation and convenience launchers that expect both sibling repositories beside it.
+## What This Repository Contains
 
-## Expected Local Layout
+- Tauri 2 and React 19 desktop interface.
+- Local Node.js/Express backend for OAuth, local APIs, persistence, cache, and synchronization.
+- Shared TypeScript contracts used by the desktop and local backend.
+- App-specific artwork, fonts, and asset-generation scripts.
+- Runtime translation files for English and Portuguese.
+- Local launchers for app-only and full-stack development.
+
+## Layout
 
 ```text
-F:\scripts
-  Discasa
-  Discasa_app
-  Discasa_bot
+Discasa
+  apps/desktop     Tauri + React interface
+  apps/server      Local backend used by the desktop app
+  packages/shared  Shared contracts
+  art              App artwork, fonts, and asset-generation scripts
+  start-app.bat    Start only the app services
+  start-all.bat    Start app plus sibling ..\Discasa_bot
+  stop-app.bat     Stop app development ports
+  stop-all.bat     Stop app and bot development ports
+```
+
+## Requirements
+
+- Node.js 20 or newer.
+- Rust and Tauri dependencies for desktop development.
+- A Discord application with OAuth configured when `MOCK_MODE=false`.
+- The bot repository at `..\Discasa_bot` for full-stack local development.
+
+## Install
+
+```powershell
+npm install
+copy .env.example .env
 ```
 
 ## Run
 
-Start the full local stack:
+App only:
+
+```powershell
+.\start-app.bat
+```
+
+Full local stack, with `..\Discasa_bot` beside this repository:
 
 ```powershell
 .\start-all.bat
 ```
 
-Start only one side:
+Stop:
 
 ```powershell
-.\start-app.bat
-.\start-bot.bat
-```
-
-Stop services:
-
-```powershell
-.\stop-all.bat
 .\stop-app.bat
-.\stop-bot.bat
+.\stop-all.bat
 ```
 
-Run the app hard reset from this coordinator:
+## Checks
+
+```powershell
+npm run check
+npm run build:desktop
+npm run build:server
+```
+
+## Local Reset
 
 ```powershell
 .\hard-reset.bat
 ```
 
-## Repository Roles
+The reset removes generated development artifacts and local Discasa app data. It does not delete Discord server channels, messages, or files.
 
-The app owns the product experience, local backend, synchronization decisions, chunking, snapshots, pending upload recovery, runtime translations, cache, and desktop UI.
+## Documentation
 
-The bot owns Discord bot identity operations: setup checks, channel creation, uploads, message deletion, raw attachment listing, attachment resolving, and snapshot read/write endpoints.
-
-See [documentation.md](documentation.md) for the coordinator notes.
+See [documentation.md](documentation.md) for architecture, storage, upload, recovery, localization, and maintenance notes.

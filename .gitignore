@@ -1,13 +1,9 @@
 # =========================
-# Discasa - Git Ignore
+# Discasa Coordinator - Git Ignore
 # =========================
 
-# Dependencies
+# Dependencies and build output in case a tool is run from this coordinator
 node_modules/
-
-package-lock.json
-
-# Frontend / Node build output
 dist/
 build/
 out/
@@ -28,24 +24,16 @@ pnpm-debug.log*
 .env.*
 !.env.example
 
-# Tauri / Rust build artifacts
-target/
-**/target/
-discasa_app/apps/desktop/src-tauri/target/
-
-# Tauri generated files
-discasa_app/apps/desktop/src-tauri/gen/
-
-# Local app data / mock data / future cache
+# Local data and temp files
 .discasa-data/
-**/.discasa-data/
-discasa_app/apps/server/.discasa-data/
-
-# Local databases and temp runtime files
 *.db-wal
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
+*.tmp
+*.temp
+*.bak
+*.orig
 
 # OS junk
 .DS_Store
@@ -55,9 +43,3 @@ Desktop.ini
 # Editor / IDE
 .idea/
 *.code-workspace
-
-# Archive / temp files
-*.tmp
-*.temp
-*.bak
-*.orig

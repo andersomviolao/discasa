@@ -5,7 +5,7 @@ set "ROOT_DIR=%~dp0"
 if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
 set "BOT_DIR=%ROOT_DIR%\..\Discasa_bot"
-set "APP_DIR=%ROOT_DIR%\discasa_app"
+set "APP_DIR=%ROOT_DIR%\..\Discasa_app"
 
 if not exist "%BOT_DIR%\package.json" (
   echo Discasa bot package not found in sibling repository: "%BOT_DIR%\package.json"
@@ -14,7 +14,8 @@ if not exist "%BOT_DIR%\package.json" (
 )
 
 if not exist "%APP_DIR%\package.json" (
-  echo Discasa app package not found: "%APP_DIR%\package.json"
+  echo Discasa app package not found in sibling repository: "%APP_DIR%\package.json"
+  echo Clone or create the app repository at "%APP_DIR%" or start the bot directly from Discasa_bot.
   exit /b 1
 )
 

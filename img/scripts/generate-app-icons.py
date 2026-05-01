@@ -40,8 +40,8 @@ def resolve_repo_root() -> Path:
 
 REPO_ROOT = resolve_repo_root()
 APP_ROOT = REPO_ROOT
-ART_DIR = REPO_ROOT / "art"
-SOURCE_IMAGE = ART_DIR / "app" / "app-logo-source.png"
+IMG_DIR = REPO_ROOT / "img"
+SOURCE_IMAGE = IMG_DIR / "app" / "app-logo-source.png"
 
 ASSETS_DIR = APP_ROOT / "apps" / "desktop" / "src" / "assets"
 TAURI_ICONS_DIR = APP_ROOT / "apps" / "desktop" / "src-tauri" / "icons"

@@ -2,6 +2,14 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-docs-assets]
+
+### Changed
+
+- Renamed the repository image asset folder from `art` to `img`.
+- Kept image-generation scripts in `img/scripts`.
+- Updated documentation references to the standardized image folder.
+
 ## [2026-05-01]
 
 ### Changed
@@ -17,4 +25,4 @@ All notable changes to **Discasa** are documented in this file.
 - Tauri desktop app under `apps/desktop`.
 - Local Express backend under `apps/server`.
 - Shared TypeScript contracts under `packages/shared`.
-- App artwork, fonts, and source assets under `art`.
+- App images, fonts, source assets, and image scripts under `img`.

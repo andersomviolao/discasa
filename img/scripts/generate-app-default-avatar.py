@@ -41,8 +41,8 @@ def resolve_repo_root() -> Path:
 
 
 REPO_ROOT = resolve_repo_root()
-ART_DIR = REPO_ROOT / "art"
-SOURCE_IMAGE = ART_DIR / "app" / "app-default-avatar-source.png"
+IMG_DIR = REPO_ROOT / "img"
+SOURCE_IMAGE = IMG_DIR / "app" / "app-default-avatar-source.png"
 ASSETS_DIR = REPO_ROOT / "apps" / "desktop" / "src" / "assets"
 OUTPUT_IMAGE = ASSETS_DIR / OUTPUT_FILENAME
 

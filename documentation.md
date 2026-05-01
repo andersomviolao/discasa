@@ -22,7 +22,7 @@ Discasa
     src
   packages/shared
     src
-  art
+  img
     app
     fonts
     scripts
@@ -144,6 +144,6 @@ Legacy Tauri paths may also exist under:
 
 - Keep the app repository responsible for user-facing behavior and state decisions.
 - Keep the bot repository small and suitable for online hosting.
-- Keep app artwork under `art`.
+- Keep app images, source assets, and image scripts under `img`.
 - Keep translations in sync when interface text changes.
 - Validate desktop and server checks before pushing.

@@ -20,7 +20,7 @@ Discasa
   apps/desktop     Tauri + React interface
   apps/server      Local backend used by the desktop app
   packages/shared  Shared contracts
-  art              App artwork, fonts, and asset-generation scripts
+  img              App images, fonts, source assets, and asset-generation scripts
   start-app.bat    Start only the app services
   start-all.bat    Start app plus sibling ..\Discasa_bot
   stop-app.bat     Stop app development ports

@@ -2760,7 +2760,7 @@ export function App() {
       const startScreenY = event.screenY;
 
       try {
-        const [startPosition, scaleFactor] = await Promise.all([appWindow.outerPosition(), appWindow.scaleFactor()]);
+        const startPosition = await appWindow.outerPosition();
         let isApplyingMove = false;
 
         const handlePointerMove = async (moveEvent: PointerEvent) => {
@@ -2768,13 +2768,14 @@ export function App() {
             return;
           }
 
+          moveEvent.preventDefault();
           isApplyingMove = true;
 
           try {
             await appWindow.setPosition(
               new PhysicalPosition(
-                Math.round(startPosition.x + (moveEvent.screenX - startScreenX) * scaleFactor),
-                Math.round(startPosition.y + (moveEvent.screenY - startScreenY) * scaleFactor),
+                Math.round(startPosition.x + moveEvent.screenX - startScreenX),
+                Math.round(startPosition.y + moveEvent.screenY - startScreenY),
               ),
             );
           } finally {
@@ -2788,7 +2789,7 @@ export function App() {
           window.removeEventListener("pointercancel", stopTouchDrag);
         };
 
-        window.addEventListener("pointermove", handlePointerMove);
+        window.addEventListener("pointermove", handlePointerMove, { passive: false });
         window.addEventListener("pointerup", stopTouchDrag, { once: true });
         window.addEventListener("pointercancel", stopTouchDrag, { once: true });
       } catch {

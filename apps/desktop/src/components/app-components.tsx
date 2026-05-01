@@ -1465,6 +1465,7 @@ type SelectionBox = {
 };
 
 type SelectionSession = {
+  pointerId: number;
   startClientX: number;
   startClientY: number;
   additive: boolean;
@@ -1474,6 +1475,7 @@ type SelectionSession = {
 };
 
 type InternalItemDragSession = {
+  pointerId: number;
   itemId: string;
   itemIds: string[];
   items: LibraryItem[];
@@ -2114,6 +2116,7 @@ function GalleryGrid({
     } catch {}
 
     internalDragSessionRef.current = {
+      pointerId,
       itemId: item.id,
       itemIds: payload.itemIds,
       items: payload.items,
@@ -2125,7 +2128,7 @@ function GalleryGrid({
 
     const handleWindowPointerMove = (moveEvent: PointerEvent) => {
       const session = internalDragSessionRef.current;
-      if (!session) {
+      if (!session || moveEvent.pointerId !== session.pointerId) {
         return;
       }
 
@@ -2137,9 +2140,10 @@ function GalleryGrid({
         return;
       }
 
+      moveEvent.preventDefault();
+
       if (!session.hasStarted) {
         session.hasStarted = true;
-        moveEvent.preventDefault();
         suppressNextItemClickRef.current = true;
 
         if (!selectedItemIdSet.has(session.itemId)) {
@@ -2177,17 +2181,25 @@ function GalleryGrid({
     };
 
     const handleWindowPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
+
       const albumId = findAlbumDropIdAtPoint({ x: upEvent.clientX, y: upEvent.clientY }) ?? internalDragSessionRef.current?.hoveredAlbumId ?? null;
       cleanupWindowListeners();
       finishInternalItemDrag(albumId);
     };
 
-    const handleWindowPointerCancel = () => {
+    const handleWindowPointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== pointerId) {
+        return;
+      }
+
       cleanupWindowListeners();
       finishInternalItemDrag(null);
     };
 
-    window.addEventListener("pointermove", handleWindowPointerMove);
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
     window.addEventListener("pointerup", handleWindowPointerUp);
     window.addEventListener("pointercancel", handleWindowPointerCancel);
   }
@@ -2238,6 +2250,7 @@ function GalleryGrid({
     event.preventDefault();
 
     selectionSessionRef.current = {
+      pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
       additive: event.ctrlKey || event.metaKey,
@@ -2260,7 +2273,7 @@ function GalleryGrid({
 
     const handleWindowPointerMove = (moveEvent: PointerEvent) => {
       const session = selectionSessionRef.current;
-      if (!session) {
+      if (!session || moveEvent.pointerId !== session.pointerId) {
         return;
       }
 
@@ -2273,14 +2286,19 @@ function GalleryGrid({
       }
 
       session.hasExceededThreshold = true;
+      moveEvent.preventDefault();
       updateSelectionBox(moveEvent.clientX, moveEvent.clientY);
     };
 
     const handleWindowPointerUp = (upEvent: PointerEvent) => {
       const session = selectionSessionRef.current;
+      if (session && upEvent.pointerId !== session.pointerId) {
+        return;
+      }
 
       window.removeEventListener("pointermove", handleWindowPointerMove);
       window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel);
 
       if (!session) {
         setSelectionBox(null);
@@ -2297,8 +2315,22 @@ function GalleryGrid({
       setSelectionBox(null);
     };
 
-    window.addEventListener("pointermove", handleWindowPointerMove);
+    const handleWindowPointerCancel = (cancelEvent: PointerEvent) => {
+      const session = selectionSessionRef.current;
+      if (session && cancelEvent.pointerId !== session.pointerId) {
+        return;
+      }
+
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel);
+      selectionSessionRef.current = null;
+      setSelectionBox(null);
+    };
+
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
     window.addEventListener("pointerup", handleWindowPointerUp);
+    window.addEventListener("pointercancel", handleWindowPointerCancel);
   }
 
   return (

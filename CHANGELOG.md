@@ -7,6 +7,7 @@ All notable changes to **Discasa** are documented in this file.
 ### Fixed
 
 - Fixed touchscreen dragging on the custom titlebar by using pointer events and a touch/pen window-position fallback.
+- Fixed touch drag stability for library files and drag-based controls by tracking the active pointer and disabling browser touch gestures on draggable surfaces.
 - Fixed `stop-all.bat` so it also closes running Tauri app instances and related Discasa processes.
 
 ## [2026-05-01-vite-path-hotfix]

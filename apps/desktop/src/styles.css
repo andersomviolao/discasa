@@ -1371,6 +1371,7 @@ img {
   border: var(--size-1) solid var(--white-alpha-10);
   overflow: hidden;
   cursor: crosshair;
+  touch-action: none;
 }
 
 .settings-color-picker-hue {
@@ -1381,6 +1382,7 @@ img {
   border-radius: var(--radius-pill);
   background: var(--gradient-hue-spectrum);
   cursor: pointer;
+  touch-action: none;
 }
 
 .settings-color-picker-handle {
@@ -1714,6 +1716,7 @@ img {
     var(--white-alpha-34) 100%
   );
   cursor: pointer;
+  touch-action: none;
 }
 
 .thumbnail-zoom-slider:focus-visible {
@@ -2378,6 +2381,7 @@ img {
   content-visibility: auto;
   contain-intrinsic-size: var(--file-card-width) var(--size-280);
   cursor: default;
+  touch-action: none;
   opacity: 1;
   transform: translateY(0);
   filter: none;

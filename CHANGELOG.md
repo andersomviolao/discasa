@@ -2,6 +2,12 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-doc-refresh]
+
+### Changed
+
+- Refreshed README and documentation to call out the standardized `img` and `img/scripts` layout.
+
 ## [2026-05-01-docs-assets]
 
 ### Changed

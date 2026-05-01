@@ -9,7 +9,7 @@ The hosted Discord bot is maintained separately in the sibling `Discasa_bot` rep
 - Tauri 2 and React 19 desktop interface.
 - Local Node.js/Express backend for OAuth, local APIs, persistence, cache, and synchronization.
 - Shared TypeScript contracts used by the desktop and local backend.
-- App-specific artwork, fonts, and asset-generation scripts.
+- App-specific images, fonts, source assets, and image-generation scripts under `img`.
 - Runtime translation files for English and Portuguese.
 - Local launchers for app-only and full-stack development.
 
@@ -69,6 +69,10 @@ npm run check
 npm run build:desktop
 npm run build:server
 ```
+
+## Asset Layout
+
+Image assets and source artwork live under `img`. Image-related helper scripts live under `img/scripts`.
 
 ## Local Reset
 

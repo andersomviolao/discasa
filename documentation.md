@@ -145,5 +145,6 @@ Legacy Tauri paths may also exist under:
 - Keep the app repository responsible for user-facing behavior and state decisions.
 - Keep the bot repository small and suitable for online hosting.
 - Keep app images, source assets, and image scripts under `img`.
+- Keep image-related scripts under `img/scripts`.
 - Keep translations in sync when interface text changes.
 - Validate desktop and server checks before pushing.

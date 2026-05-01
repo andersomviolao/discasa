@@ -1,5 +1,6 @@
 import type { GuildSummary } from "@discasa/shared";
 import { env } from "./config";
+import { logger } from "./logger";
 
 type DiscordUserGuild = {
   id: string;
@@ -52,7 +53,7 @@ async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserG
       },
     });
   } catch (error) {
-    console.error("[Discord API] Network failure while fetching user guilds.", {
+    logger.error("[Discord API] Network failure while fetching user guilds.", {
       endpoint,
       error,
     });
@@ -79,11 +80,11 @@ async function fetchDiscordUserGuilds(accessToken: string): Promise<DiscordUserG
     };
 
     if (response.status === 401 || response.status === 403) {
-      console.warn("[Discord API] Stored Discord user token is no longer valid.", logPayload);
+      logger.warn("[Discord API] Stored Discord user token is no longer valid.", logPayload);
       throw new DiscordAuthorizationError("Discord login expired. Please login again.", response.status);
     }
 
-    console.error("[Discord API] Failed to fetch user guilds.", logPayload);
+    logger.error("[Discord API] Failed to fetch user guilds.", logPayload);
 
     throw new Error(
       `Failed to fetch the user guild list from Discord (${response.status} ${response.statusText}).`,

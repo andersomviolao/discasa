@@ -9,6 +9,7 @@ import type {
   SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
 import { env } from "./config";
+import { logger } from "./logger";
 import {
   addAlbum,
   addLibraryItemsToAlbum,
@@ -51,6 +52,7 @@ import {
 } from "./persistence";
 import {
   deleteStoredItemFromDiscord,
+  getDiscasaBotDiagnostics,
   getDiscasaBotStatus,
   hasCurrentConfigSnapshot,
   hasCurrentFolderSnapshot,
@@ -247,7 +249,7 @@ async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolea
       try {
         await syncRemoteIndexState();
       } catch (error) {
-        console.warn("[Discasa recovery] Could not sync the refreshed index snapshot to Discord.", error);
+        logger.warn("[Discasa recovery] Could not sync the refreshed index snapshot to Discord.", error);
       }
     }
 
@@ -262,14 +264,14 @@ async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolea
           console.info(`[Discasa import] Imported ${importResult.imported.length} external file(s).`);
         }
       } catch (error) {
-        console.warn("[Discasa import] Could not import external files during hydration.", error);
+        logger.warn("[Discasa import] Could not import external files during hydration.", error);
       }
     }
 
     remoteLibraryHydrationKey = hydrationKey;
   })()
     .catch((error) => {
-      console.warn("[Discasa recovery] Could not hydrate the library from Discord snapshots.", error);
+      logger.warn("[Discasa recovery] Could not hydrate the library from Discord snapshots.", error);
     })
     .finally(() => {
       remoteLibraryHydrationPromise = null;
@@ -369,7 +371,7 @@ async function refreshRequestDiscordSession(request: Request): Promise<boolean> 
     );
     return true;
   } catch (error) {
-    console.warn("[Discord OAuth] Could not refresh the stored Discord session.", error);
+    logger.warn("[Discord OAuth] Could not refresh the stored Discord session.", error);
     expireRequestDiscordSession(request);
     return false;
   }
@@ -417,6 +419,58 @@ router.get("/session", (request, response) => {
 router.get("/bot/status", async (_request, response, next) => {
   try {
     response.json(await getDiscasaBotStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/diagnostics", async (request, response, next) => {
+  try {
+    const botStatus = await getDiscasaBotStatus();
+    const botDiagnostics = await getDiscasaBotDiagnostics();
+    const activeStorage = getActiveStorageContext();
+    const config = getDiscasaConfig();
+    const items = getLibraryItems();
+    const albums = getAlbums();
+    const localStorage = getLocalStorageStatus();
+
+    response.json({
+      ok: botStatus.ok,
+      checkedAt: new Date().toISOString(),
+      service: "discasa_app",
+      app: {
+        serverPort: env.port,
+        frontendUrl: env.frontendUrl,
+        mockMode: env.mockMode,
+        authenticated: Boolean(request.session.authenticated),
+        activeGuild: activeStorage
+          ? {
+              id: activeStorage.guildId,
+              name: activeStorage.guildName,
+            }
+          : null,
+      },
+      bot: {
+        status: botStatus,
+        diagnostics: botDiagnostics,
+      },
+      library: {
+        itemCount: items.length,
+        activeItemCount: items.filter((item) => !item.isTrashed).length,
+        trashedItemCount: items.filter((item) => item.isTrashed).length,
+        albumCount: albums.length,
+      },
+      storage: {
+        remoteApplied: Boolean(activeStorage),
+        local: localStorage,
+      },
+      config: {
+        language: config.language,
+        localMirrorEnabled: config.localMirrorEnabled,
+        galleryDisplayMode: config.galleryDisplayMode,
+        thumbnailZoomPercent: config.thumbnailZoomPercent,
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -583,7 +637,7 @@ router.get("/config", async (_request, response, next) => {
       try {
         await syncRemoteConfigState();
       } catch (error) {
-        console.warn("[Discasa config] Could not sync the local config snapshot to Discord.", error);
+        logger.warn("[Discasa config] Could not sync the local config snapshot to Discord.", error);
       }
     }
 
@@ -1403,7 +1457,7 @@ authRouter.get("/discord/callback", async (request, response) => {
       }),
     );
   } catch (error) {
-    console.error("Discord OAuth callback failed", error);
+    logger.error("Discord OAuth callback failed", error);
     clearPersistedAuthSession();
     response.status(500).send(
       renderOauthResultPage({

@@ -59,6 +59,7 @@ const dynamicRules: Record<InterfaceLanguage, DynamicRule[]> = {
     [/^Current applied server: (.+)$/u, "Servidor aplicado atual: $1"],
     [/^(\d+) selected$/u, "$1 selecionado(s)"],
     [/^(\d+) file\(s\)$/u, "$1 arquivo(s)"],
+    [/^(\d+) pending$/u, "$1 pendente(s)"],
     [/^(\d+) files, (.+)$/u, "$1 arquivos, $2"],
     [/^1 file link could not be restored from Discord and may appear unavailable\.$/u, "1 link de arquivo não pôde ser restaurado do Discord e pode aparecer indisponível."],
     [/^(\d+) file links could not be restored from Discord and may appear unavailable\.$/u, "$1 links de arquivo não puderam ser restaurados do Discord e podem aparecer indisponíveis."],

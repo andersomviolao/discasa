@@ -110,15 +110,15 @@ echo npm install finished successfully for %INSTALL_NAME%.
 exit /b 0
 
 :start_discasa
-if not exist "%ROOT_DIR%\start.bat" (
-  echo Root start script not found: %ROOT_DIR%\start.bat
+if not exist "%ROOT_DIR%\start-all.bat" (
+  echo Root start script not found: %ROOT_DIR%\start-all.bat
   pause
   exit /b 1
 )
 
 echo.
 echo Starting Discasa from root launcher...
-call "%ROOT_DIR%\start.bat"
+call "%ROOT_DIR%\start-all.bat"
 exit /b 0
 
 :remove_dir

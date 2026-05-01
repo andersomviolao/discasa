@@ -2,6 +2,8 @@ import cors from "cors";
 import express from "express";
 import session from "express-session";
 import { env } from "./config";
+import { sendErrorResponse } from "./errors";
+import { logger } from "./logger";
 import { hydrateSessionFromPersistedAuth } from "./persistence";
 import { apiRouter, authRouter } from "./routes";
 
@@ -28,6 +30,15 @@ app.use(
   }),
 );
 app.use(express.json());
+app.use((request, response, next) => {
+  const startedAt = Date.now();
+
+  response.on("finish", () => {
+    logger.info(`${request.method} ${request.originalUrl} ${response.statusCode} ${Date.now() - startedAt}ms`);
+  });
+
+  next();
+});
 app.use(
   session({
     secret: env.sessionSecret,
@@ -55,20 +66,22 @@ app.use((request, _response, next) => {
 });
 
 app.get("/health", (_request, response) => {
-  response.json({ ok: true, mockMode: env.mockMode });
+  response.json({
+    ok: true,
+    service: "discasa_app_server",
+    mockMode: env.mockMode,
+    checkedAt: new Date().toISOString(),
+  });
 });
 
 app.use("/auth", authRouter);
 app.use("/api", apiRouter);
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-  console.error(error);
-  response.status(500).json({
-    error: error instanceof Error ? error.message : "Unexpected server error",
-  });
+  sendErrorResponse(response, error, "Unexpected server error");
 });
 
 app.listen(env.port, () => {
-  console.log(`Discasa server running on http://localhost:${env.port}`);
-  console.log(`Mock mode: ${env.mockMode}`);
+  logger.info(`Local server running on http://localhost:${env.port}`);
+  logger.info(`Mock mode: ${env.mockMode}`);
 });

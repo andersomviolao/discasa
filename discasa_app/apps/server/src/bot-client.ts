@@ -12,6 +12,7 @@ import type {
   PersistedIndexSnapshot,
 } from "@discasa/shared";
 import { env } from "./config";
+import { logger } from "./logger";
 import type { ActiveStorageContext, UploadedFileRecord } from "./persistence";
 
 export type DiscasaBotStatus = {
@@ -22,6 +23,28 @@ export type DiscasaBotStatus = {
   botLoggedIn: boolean;
   botUserId: string | null;
   error?: string;
+};
+
+export type DiscasaBotDiagnostics = {
+  ok: boolean;
+  checkedAt: string;
+  service: "discasa_bot";
+  runtime: {
+    mockMode: boolean;
+    botConfigured: boolean;
+    botLoggedIn: boolean;
+    botUserId: string | null;
+  };
+  queue: {
+    pendingOrRunningWrites: number;
+    completedOrStartedWrites: number;
+    lastError: string | null;
+    lastFinishedAt: string | null;
+  };
+  storage: {
+    uploadLimitBytes: number;
+    uploadLimitLabel: string;
+  };
 };
 
 type DiscasaSetupStatus = {
@@ -222,6 +245,14 @@ export async function getDiscasaBotStatus(): Promise<DiscasaBotStatus> {
       botUserId: null,
       error: error instanceof Error ? error.message : "Discasa bot service is unavailable.",
     };
+  }
+}
+
+export async function getDiscasaBotDiagnostics(): Promise<DiscasaBotDiagnostics | null> {
+  try {
+    return await requestBotJson<DiscasaBotDiagnostics>("/diagnostics");
+  } catch {
+    return null;
   }
 }
 
@@ -860,7 +891,7 @@ export async function refreshIndexSnapshotAttachmentUrls(
       }
 
       nextItems.push(nextItem);
-      console.warn(
+      logger.warn(
         `[Discasa recovery] Could not relink "${item.name}" (${item.id}). ${resolution.reason}`,
       );
       continue;

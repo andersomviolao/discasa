@@ -25,6 +25,17 @@ art
 
 The scripts in `art/scripts` read source artwork from the root `art` folder and write generated desktop assets back into `discasa_app`.
 
+Root launchers also live at the repository root:
+
+```text
+start-all.bat
+stop-all.bat
+start-app.bat
+stop-app.bat
+start-bot.bat
+stop-bot.bat
+```
+
 ### 2.2 `discasa_app`
 
 Contains the main application.
@@ -32,6 +43,10 @@ Contains the main application.
 ```text
 discasa_app
   apps/desktop
+    src/main.tsx
+    src/App.tsx
+    src/components
+    src/lib
   apps/server
   packages/shared
 ```
@@ -59,14 +74,19 @@ Contains the Discord bot HTTP service.
 ```text
 discasa_bot
   src/index.ts
+  src/server.ts
+  src/discord-service.ts
+  src/config.ts
+  src/logger.ts
+  src/errors.ts
 ```
 
-The bot is intentionally monolithic because it is expected to be hosted online. Keeping the hosted service in one source file reduces deployment surface and keeps all bot-only logic easy to audit.
+The bot stays compact for online hosting, but its code is split into a small set of operational modules: entrypoint, HTTP routes, Discord storage operations, configuration, logging, and error responses.
 
 Current responsibilities:
 
 - start the `discord.js` client;
-- respond to `/health`;
+- respond to `/health` and `/diagnostics`;
 - report Discasa's fixed upload limit;
 - inspect whether the bot and Discasa structure exist in a server;
 - create or reuse the category and channels;
@@ -370,6 +390,7 @@ Main areas:
 - session;
 - eligible server listing;
 - bot status;
+- app and bot diagnostics;
 - Discasa initialization;
 - library;
 - albums/folders;
@@ -389,6 +410,7 @@ http://localhost:3002
 Main endpoints:
 
 - `GET /health`;
+- `GET /diagnostics`;
 - `GET /guilds/:guildId/upload-limit`;
 - `GET /guilds/:guildId/setup-status`;
 - `POST /guilds/:guildId/initialize`;
@@ -446,13 +468,22 @@ npm install
 Full run:
 
 ```powershell
-.\start.bat
+.\start-all.bat
 ```
 
 Stop processes:
 
 ```powershell
-.\stop.bat
+.\stop-all.bat
+```
+
+Start or stop only one component:
+
+```powershell
+.\start-app.bat
+.\stop-app.bat
+.\start-bot.bat
+.\stop-bot.bat
 ```
 
 Checks:

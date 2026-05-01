@@ -37,13 +37,69 @@ export type DiscasaBotStatus = {
   error?: string;
 };
 
+export type AppDiagnostics = {
+  ok: boolean;
+  checkedAt: string;
+  service: "discasa_app";
+  app: {
+    serverPort: number;
+    frontendUrl: string;
+    mockMode: boolean;
+    authenticated: boolean;
+    activeGuild: {
+      id: string;
+      name: string;
+    } | null;
+  };
+  bot: {
+    status: DiscasaBotStatus;
+    diagnostics: {
+      ok: boolean;
+      checkedAt: string;
+      service: "discasa_bot";
+      runtime: {
+        mockMode: boolean;
+        botConfigured: boolean;
+        botLoggedIn: boolean;
+        botUserId: string | null;
+      };
+      queue: {
+        pendingOrRunningWrites: number;
+        completedOrStartedWrites: number;
+        lastError: string | null;
+        lastFinishedAt: string | null;
+      };
+      storage: {
+        uploadLimitBytes: number;
+        uploadLimitLabel: string;
+      };
+    } | null;
+  };
+  library: {
+    itemCount: number;
+    activeItemCount: number;
+    trashedItemCount: number;
+    albumCount: number;
+  };
+  storage: {
+    remoteApplied: boolean;
+    local: LocalStorageStatus;
+  };
+  config: {
+    language: DiscasaConfig["language"];
+    localMirrorEnabled: boolean;
+    galleryDisplayMode: GalleryDisplayMode;
+    thumbnailZoomPercent: number;
+  };
+};
+
 export type HsvColor = {
   hue: number;
   saturation: number;
   value: number;
 };
 
-export type SettingsSection = "discord" | "appearance" | "storage" | "language" | "window";
+export type SettingsSection = "discord" | "appearance" | "storage" | "language" | "diagnostics" | "window";
 export type WindowState = "default" | "maximized";
 
 export type FixedLibraryViewId = "all-files" | "favorites" | "trash";
@@ -561,6 +617,10 @@ export async function getDiscasaSetupStatus(guildId: string): Promise<DiscasaSet
 
 export async function getDiscasaBotStatus(): Promise<DiscasaBotStatus> {
   return requestJson<DiscasaBotStatus>("/api/bot/status");
+}
+
+export async function getAppDiagnostics(): Promise<AppDiagnostics> {
+  return requestJson<AppDiagnostics>("/api/diagnostics");
 }
 
 export async function initializeDiscasa(guildId: string): Promise<DiscasaInitializationResponse> {

@@ -24,6 +24,7 @@ Discasa currently includes:
 - automatic chunking for files larger than `10 MiB`;
 - index, folder, and config snapshots stored in Discord;
 - runtime language switching between English and Portuguese;
+- local app and hosted bot diagnostics in Settings;
 - a login/install flow with a dynamic synchronization screen;
 - local cache for the library, files, and thumbnails.
 
@@ -40,11 +41,27 @@ Discasa
 
   discasa_app
     apps/desktop     Tauri + React interface
+      src/main.tsx    Desktop entrypoint
+      src/App.tsx     Main app flow and state
+      src/components  Desktop UI components
+      src/lib         Desktop API and view helpers
     apps/server      Local app backend
     packages/shared  Shared app contracts
 
   discasa_bot
-    src/index.ts     Monolithic Discord bot HTTP service
+    src/index.ts     Bot service entrypoint
+    src/server.ts    HTTP routes and diagnostics
+    src/discord-service.ts  Discord storage operations
+    src/config.ts    Environment loading
+    src/logger.ts    Standardized logs
+    src/errors.ts    Standardized error responses
+
+  start-all.bat      Start the full local stack
+  stop-all.bat       Stop the full local stack
+  start-app.bat      Start only the app services
+  stop-app.bat       Stop only the app services
+  start-bot.bat      Start only the bot service
+  stop-bot.bat       Stop only the bot service
 ```
 
 The app owns product rules and coordination:
@@ -149,7 +166,7 @@ DISCORD_BOT_TOKEN=
 Use the root launcher:
 
 ```powershell
-.\start.bat
+.\start-all.bat
 ```
 
 It starts:
@@ -161,7 +178,16 @@ It starts:
 To stop:
 
 ```powershell
-.\stop.bat
+.\stop-all.bat
+```
+
+To run only one side of the project, use the root component launchers:
+
+```powershell
+.\start-app.bat
+.\stop-app.bat
+.\start-bot.bat
+.\stop-bot.bat
 ```
 
 ## Useful Scripts

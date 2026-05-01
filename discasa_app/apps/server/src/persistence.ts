@@ -23,6 +23,7 @@ import {
   type PersistedIndexSnapshot,
   type SaveLibraryItemMediaEditInput,
 } from "@discasa/shared";
+import { logger } from "./logger";
 
 type PersistedFolderNode = FolderNode;
 type PersistedFolderMembership = FolderMembership;
@@ -167,7 +168,7 @@ function copyFileIfDestinationMissing(sourcePath: string, targetPath: string): v
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.copyFileSync(sourcePath, targetPath);
   } catch (error) {
-    console.warn("[Discasa storage] Could not migrate a legacy storage file.", error);
+    logger.warn("[Discasa storage] Could not migrate a legacy storage file.", error);
   }
 }
 
@@ -193,7 +194,7 @@ function copyDirectoryContentsIfDestinationMissing(sourceDir: string, targetDir:
       }
     }
   } catch (error) {
-    console.warn("[Discasa storage] Could not migrate a legacy cache folder.", error);
+    logger.warn("[Discasa storage] Could not migrate a legacy cache folder.", error);
   }
 }
 
@@ -970,7 +971,7 @@ function removeFileIfExists(filePath: string): void {
       fs.unlinkSync(filePath);
     }
   } catch (error) {
-    console.warn("[Discasa local cache] Could not remove a managed local file.", error);
+    logger.warn("[Discasa local cache] Could not remove a managed local file.", error);
   }
 }
 
@@ -1059,7 +1060,7 @@ function moveLocalMirrorFiles(previousRootPath: string, nextRootPath: string): v
     try {
       copyOrMoveManagedFile(previousFilePath, nextFilePath);
     } catch (error) {
-      console.warn("[Discasa local cache] Could not move a mirrored file to the new folder.", error);
+      logger.warn("[Discasa local cache] Could not move a mirrored file to the new folder.", error);
     }
   }
 }
@@ -1077,7 +1078,7 @@ async function downloadAttachmentBuffer(url: string): Promise<Buffer | null> {
 
     return Buffer.from(await response.arrayBuffer());
   } catch (error) {
-    console.warn("[Discasa local cache] Could not download a file from Discord.", error);
+    logger.warn("[Discasa local cache] Could not download a file from Discord.", error);
     return null;
   }
 }
@@ -1155,7 +1156,7 @@ async function synchronizeLocalMirrorFromCloud(): Promise<void> {
 
 function queueLocalMirrorSynchronization(): void {
   void synchronizeLocalMirrorFromCloud().catch((error) => {
-    console.warn("[Discasa local cache] Could not synchronize mirrored files.", error);
+    logger.warn("[Discasa local cache] Could not synchronize mirrored files.", error);
   });
 }
 
@@ -1226,7 +1227,7 @@ export function scanLocalMirrorImportCandidates(): LocalMirrorImportScan {
       });
     }
   } catch (error) {
-    console.warn("[Discasa local mirror] Could not scan the local mirror folder for imported files.", error);
+    logger.warn("[Discasa local mirror] Could not scan the local mirror folder for imported files.", error);
   }
 
   return {
@@ -1257,7 +1258,7 @@ export function adoptLocalMirrorImportedFiles(items: LibraryItem[], candidates: 
         fs.copyFileSync(targetPath, getThumbnailCacheFilePath(persistedItem));
       }
     } catch (error) {
-      console.warn("[Discasa local mirror] Could not adopt an imported local mirror file.", error);
+      logger.warn("[Discasa local mirror] Could not adopt an imported local mirror file.", error);
     }
   });
 }
@@ -1321,7 +1322,7 @@ function cacheUploadedFileForItem(item: LibraryItem, file: Express.Multer.File):
     try {
       writeManagedFile(getLocalMirrorFilePath(persistedItem), file.buffer);
     } catch (error) {
-      console.warn("[Discasa local cache] Could not mirror an uploaded file locally.", error);
+      logger.warn("[Discasa local cache] Could not mirror an uploaded file locally.", error);
     }
   }
 
@@ -1329,7 +1330,7 @@ function cacheUploadedFileForItem(item: LibraryItem, file: Express.Multer.File):
     try {
       writeManagedFile(getThumbnailCacheFilePath(persistedItem), file.buffer);
     } catch (error) {
-      console.warn("[Discasa local cache] Could not cache an uploaded thumbnail.", error);
+      logger.warn("[Discasa local cache] Could not cache an uploaded thumbnail.", error);
     }
   }
 }
@@ -1735,7 +1736,7 @@ export async function getLibraryItemThumbnailSource(
       ensureParentDir(cachedPath);
       fs.copyFileSync(localMirrorPath, cachedPath);
     } catch (error) {
-      console.warn("[Discasa local cache] Could not seed the thumbnail cache from a mirrored file.", error);
+      logger.warn("[Discasa local cache] Could not seed the thumbnail cache from a mirrored file.", error);
     }
 
     if (hasReadableFile(cachedPath)) {

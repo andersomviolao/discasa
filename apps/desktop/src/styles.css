@@ -2391,6 +2391,48 @@ img {
     filter 180ms ease;
 }
 
+.folder-tile {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-8);
+  cursor: pointer;
+  touch-action: manipulation;
+  text-align: left;
+}
+
+.folder-tile-preview {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border-radius: var(--size-18);
+  border: var(--size-1) solid var(--white-alpha-07);
+  background: linear-gradient(145deg, var(--white-alpha-10), var(--white-alpha-035));
+  color: var(--accent-color);
+  transition:
+    border-color var(--transition-state),
+    box-shadow var(--transition-state),
+    background var(--transition-state),
+    transform var(--transition-state);
+}
+
+.folder-tile-preview svg {
+  width: clamp(var(--size-52), 34%, var(--size-96));
+  height: clamp(var(--size-52), 34%, var(--size-96));
+  display: block;
+}
+
+.folder-tile:hover .folder-tile-preview {
+  border-color: var(--accent-alpha-74);
+  background: var(--white-alpha-08);
+  box-shadow: 0 0 0 var(--size-1) var(--accent-alpha-16);
+  transform: translateY(-2px);
+}
+
+.folder-tile-meta {
+  min-width: 0;
+}
+
 .file-tile.dragging {
   opacity: 0.36;
   transform: scale(0.985);

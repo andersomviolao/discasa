@@ -121,6 +121,18 @@ export type AlbumContextMenuState = {
 export type GalleryDisplayMode = "free" | "square";
 export type MouseWheelBehavior = "zoom" | "navigate";
 
+export type LocalPathInspection = {
+  path: string;
+  name: string;
+  isDirectory: boolean;
+  isFile: boolean;
+};
+
+export type LocalFolderUploadTarget = {
+  path: string;
+  albumId: string;
+};
+
 export type ViewerDraftState = {
   zoomLevel: number;
   rotationDegrees: number;
@@ -499,7 +511,7 @@ export function getCurrentDescription(selectedView: SidebarView): string {
       if (selectedView.id === "duplicates") return "Files that Discasa detected as duplicate pairs.";
       return "Files that are neither images nor videos.";
     case "album":
-      return "Files linked to this album.";
+      return "Files and folders inside this album.";
     default:
       return "";
   }
@@ -733,8 +745,8 @@ export async function getAlbums(): Promise<AlbumRecord[]> {
   return requestJson<AlbumRecord[]>("/api/albums");
 }
 
-export async function createAlbum(input: CreateAlbumInput): Promise<{ id: string }> {
-  return requestJson<{ id: string }>("/api/albums", {
+export async function createAlbum(input: CreateAlbumInput): Promise<{ id: string; album: AlbumRecord }> {
+  return requestJson<{ id: string; album: AlbumRecord }>("/api/albums", {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -823,12 +835,22 @@ export async function uploadFiles(files: File[], albumId?: string): Promise<Uplo
 export async function uploadLocalFilePaths(
   filePaths: string[],
   albumId?: string,
-  clientUploadIds?: string[],
+  clientUploadIds?: Array<string | undefined>,
+  folderTargets?: LocalFolderUploadTarget[],
 ): Promise<UploadResponse> {
   return requestJson<UploadResponse>("/api/upload-local", {
     method: "POST",
-    body: JSON.stringify({ filePaths, albumId, clientUploadIds }),
+    body: JSON.stringify({ filePaths, albumId, clientUploadIds, folderTargets }),
   });
+}
+
+export async function inspectLocalFilePaths(filePaths: string[]): Promise<LocalPathInspection[]> {
+  const result = await requestJson<{ paths: LocalPathInspection[] }>("/api/local-paths/inspect", {
+    method: "POST",
+    body: JSON.stringify({ filePaths }),
+  });
+
+  return result.paths;
 }
 
 export async function importExternalLibraryFiles(): Promise<DiscasaExternalImportResult> {

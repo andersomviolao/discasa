@@ -141,8 +141,37 @@ type LocalUploadBatch = {
   files: LocalSourceFile[];
   albumId?: string;
   albumName?: string;
+  parentAlbumId?: string;
   clientUploadIds?: Array<string | undefined>;
 };
+
+type LocalFolderUploadTarget = {
+  path: string;
+  albumId: string;
+};
+
+function readFolderUploadTargets(rawTargets: unknown): Map<string, string> {
+  const targets = new Map<string, string>();
+
+  if (!Array.isArray(rawTargets)) {
+    return targets;
+  }
+
+  for (const rawTarget of rawTargets) {
+    if (!rawTarget || typeof rawTarget !== "object") {
+      continue;
+    }
+
+    const entry = rawTarget as Partial<LocalFolderUploadTarget>;
+    if (typeof entry.path !== "string" || typeof entry.albumId !== "string" || !entry.path || !entry.albumId) {
+      continue;
+    }
+
+    targets.set(path.resolve(entry.path), entry.albumId);
+  }
+
+  return targets;
+}
 
 function hashBuffer(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
@@ -201,7 +230,7 @@ async function collectLocalSourceFilesFromDirectory(directoryPath: string): Prom
 
 async function readLocalUploadBatches(
   rawPaths: unknown,
-  options: { albumId?: string; clientUploadIds?: Array<string | undefined> } = {},
+  options: { albumId?: string; clientUploadIds?: Array<string | undefined>; folderTargets?: Map<string, string> } = {},
 ): Promise<LocalUploadBatch[]> {
   if (!Array.isArray(rawPaths)) {
     throw new Error("filePaths must be an array.");
@@ -222,9 +251,12 @@ async function readLocalUploadBatches(
     if (stat.isDirectory()) {
       const files = await collectLocalSourceFilesFromDirectory(filePath);
       if (files.length > 0) {
+        const targetAlbumId = options.folderTargets?.get(filePath);
         batches.push({
           files,
-          albumName: path.basename(filePath),
+          albumId: targetAlbumId,
+          albumName: targetAlbumId ? undefined : path.basename(filePath),
+          parentAlbumId: targetAlbumId ? undefined : options.albumId,
         });
       }
       continue;
@@ -887,6 +919,45 @@ router.get("/local-storage", (_request, response) => {
   response.json(getLocalStorageStatus());
 });
 
+router.post("/local-paths/inspect", async (request, response, next) => {
+  try {
+    const rawFilePaths = Array.isArray(request.body.filePaths) ? request.body.filePaths : [];
+    const inspected = await Promise.all(
+      rawFilePaths.map(async (rawPath: unknown) => {
+        if (typeof rawPath !== "string" || rawPath.length === 0) {
+          return null;
+        }
+
+        const filePath = path.resolve(rawPath);
+        try {
+          const stat = await fs.stat(filePath);
+          return {
+            path: filePath,
+            name: path.basename(filePath),
+            isDirectory: stat.isDirectory(),
+            isFile: stat.isFile(),
+          };
+        } catch {
+          return {
+            path: filePath,
+            name: path.basename(filePath),
+            isDirectory: false,
+            isFile: false,
+          };
+        }
+      }),
+    );
+
+    response.json({
+      paths: inspected.filter(
+        (entry): entry is { path: string; name: string; isDirectory: boolean; isFile: boolean } => Boolean(entry),
+      ),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/albums", async (_request, response, next) => {
   try {
     await hydrateRemoteLibraryState();
@@ -899,15 +970,16 @@ router.get("/albums", async (_request, response, next) => {
 router.post("/albums", async (request, response, next) => {
   try {
     const name = String(request.body.name ?? "").trim();
+    const parentId = typeof request.body.parentId === "string" && request.body.parentId.length > 0 ? request.body.parentId : null;
 
     if (!name) {
       response.status(400).json({ error: "Album name is required" });
       return;
     }
 
-    const created = addAlbum(name);
+    const created = addAlbum(name, parentId);
     await syncRemoteFolderState();
-    response.status(201).json({ id: created.id });
+    response.status(201).json({ id: created.id, album: created });
   } catch (error) {
     next(error);
   }
@@ -1160,7 +1232,8 @@ router.post("/upload-local", async (request, response, next) => {
     const albumId = typeof request.body.albumId === "string" && request.body.albumId.length > 0 ? request.body.albumId : undefined;
     const rawFilePaths = Array.isArray(request.body.filePaths) ? request.body.filePaths : [];
     const clientUploadIds = readClientUploadIds(request.body.clientUploadIds, rawFilePaths.length);
-    const batches = await readLocalUploadBatches(rawFilePaths, { albumId, clientUploadIds });
+    const folderTargets = readFolderUploadTargets(request.body.folderTargets);
+    const batches = await readLocalUploadBatches(rawFilePaths, { albumId, clientUploadIds, folderTargets });
     const fileCount = batches.reduce((count, batch) => count + batch.files.length, 0);
 
     if (!fileCount) {
@@ -1175,7 +1248,7 @@ router.post("/upload-local", async (request, response, next) => {
 
     const uploaded: LibraryItem[] = [];
     for (const batch of batches) {
-      const targetAlbumId = batch.albumName ? addAlbum(batch.albumName).id : batch.albumId;
+      const targetAlbumId = batch.albumName ? addAlbum(batch.albumName, batch.parentAlbumId ?? null).id : batch.albumId;
       const records = env.mockMode
         ? batch.files.map((file) => ({
             fileName: file.fileName,
@@ -1198,7 +1271,7 @@ router.post("/upload-local", async (request, response, next) => {
     }
 
     await syncRemoteLibraryState();
-    response.status(201).json({ uploaded });
+    response.status(201).json({ uploaded, albums: getAlbums() });
   } catch (error) {
     next(error);
   }

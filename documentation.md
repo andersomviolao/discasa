@@ -76,14 +76,16 @@ Discasa
 
 1. The user selects or drops files or folders.
 2. Tauri sends native local paths to `/api/upload-local`.
-3. The UI creates pending items immediately.
-4. The user can favorite, move, or trash pending items while upload continues.
+3. The UI inspects local paths so directories can become folders immediately while direct files become pending items.
+4. The user can favorite, move, or trash pending file items while upload continues.
 5. The backend chunks files larger than `10 MiB`.
 6. The bot uploads each attachment or chunk to Discord.
 7. The app reconciles the final item with the pending id.
 8. Snapshots and caches are updated.
 
-When a local path is a directory, the backend recursively reads its files, creates an album named after the selected folder, and stores the uploaded files in that album.
+When a local path is a directory at the library root, Discasa creates an album named after the selected folder and stores the uploaded files in that album. When the current view is already an album or nested folder, the selected directory becomes a child folder inside that location instead of appearing in the sidebar.
+
+The folder snapshot stores root albums and nested folders in the same folder tree. Sidebar album ordering applies only to root albums; nested folders are opened from the gallery and can be targeted by uploads or file moves through their folder id.
 
 Pending upload records are stored outside the normal library cache so interrupted previews cannot become permanent ghost files.
 

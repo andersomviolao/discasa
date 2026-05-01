@@ -525,11 +525,13 @@ function normalizeFolderNode(raw: unknown): PersistedFolderNode | null {
     return null;
   }
 
+  const parentId = typeof entry.parentId === "string" ? entry.parentId : null;
+
   return {
     id: entry.id,
-    type: "album",
+    type: parentId && entry.type === "folder" ? "folder" : "album",
     name: entry.name,
-    parentId: typeof entry.parentId === "string" ? entry.parentId : null,
+    parentId,
     position: entry.position,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,
@@ -1501,11 +1503,15 @@ function toAlbumRecord(folder: PersistedFolderNode, itemsById: Map<string, Persi
   const itemCount = database.memberships.filter(
     (membership) => membership.folderId === folder.id && itemsById.has(membership.itemId) && !itemsById.get(membership.itemId)?.isTrashed,
   ).length;
+  const childFolderCount = database.folders.filter((entry) => entry.parentId === folder.id).length;
 
   return {
     id: folder.id,
+    type: folder.type,
     name: folder.name,
+    parentId: folder.parentId,
     itemCount,
+    childFolderCount,
   };
 }
 
@@ -1541,6 +1547,34 @@ function createAlbumMembership(folderId: string, itemId: string, addedAt: string
 
 function hasFolder(folderId: string): boolean {
   return database.folders.some((folder) => folder.id === folderId);
+}
+
+function getNextFolderPosition(parentId: string | null): number {
+  const siblingPositions = database.folders
+    .filter((folder) => folder.parentId === parentId)
+    .map((folder) => folder.position);
+
+  if (!siblingPositions.length) {
+    return 0;
+  }
+
+  return Math.max(...siblingPositions) + 1;
+}
+
+function sortFolderNodes(left: PersistedFolderNode, right: PersistedFolderNode): number {
+  if (left.parentId === right.parentId) {
+    return left.position - right.position || left.name.localeCompare(right.name);
+  }
+
+  if (left.parentId === null) {
+    return -1;
+  }
+
+  if (right.parentId === null) {
+    return 1;
+  }
+
+  return left.parentId.localeCompare(right.parentId) || left.position - right.position;
 }
 
 function createOriginalSourceFromPersistedItem(item: PersistedItem): LibraryItemOriginalSource {
@@ -1645,7 +1679,7 @@ export function createFolderSnapshot(): PersistedFolderSnapshot {
     updatedAt: new Date().toISOString(),
     folders: database.folders
       .slice()
-      .sort((left, right) => left.position - right.position)
+      .sort(sortFolderNodes)
       .map((folder) => ({ ...folder })),
     memberships: database.memberships.map((membership) => ({ ...membership })),
   };
@@ -1683,7 +1717,7 @@ export function replaceDatabaseFromFolderSnapshot(snapshot: PersistedFolderSnaps
     ? snapshot.memberships.map((entry) => normalizeFolderMembership(entry)).filter((entry): entry is PersistedFolderMembership => Boolean(entry))
     : createEmptyFolderSnapshot().memberships;
 
-  database.folders = nextFolders.sort((left, right) => left.position - right.position);
+  database.folders = nextFolders.sort(sortFolderNodes);
   const folderIds = new Set(database.folders.map((folder) => folder.id));
   const itemIds = new Set(database.items.map((item) => item.id));
   database.memberships = nextMemberships.filter(
@@ -1697,25 +1731,39 @@ export function getAlbums(): AlbumRecord[] {
 
   return database.folders
     .slice()
-    .sort((left, right) => left.position - right.position)
+    .sort(sortFolderNodes)
     .map((folder) => toAlbumRecord(folder, itemsById));
 }
 
-export function addAlbum(name: string): AlbumRecord {
+export function addAlbum(name: string, parentId: string | null = null): AlbumRecord {
   const timestamp = new Date().toISOString();
+  const normalizedParentId = parentId && hasFolder(parentId) ? parentId : null;
   const next: PersistedFolderNode = {
     id: nanoid(10),
-    type: "album",
+    type: normalizedParentId ? "folder" : "album",
     name,
-    parentId: null,
-    position: database.folders.length,
+    parentId: normalizedParentId,
+    position: getNextFolderPosition(normalizedParentId),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
 
   database.folders.push(next);
+  if (normalizedParentId) {
+    const parentFolder = database.folders.find((folder) => folder.id === normalizedParentId);
+    if (parentFolder) {
+      parentFolder.updatedAt = timestamp;
+    }
+  }
   saveDatabase();
-  return getAlbums().find((album) => album.id === next.id) ?? { id: next.id, name: next.name, itemCount: 0 };
+  return getAlbums().find((album) => album.id === next.id) ?? {
+    id: next.id,
+    type: next.type,
+    name: next.name,
+    parentId: next.parentId,
+    itemCount: 0,
+    childFolderCount: 0,
+  };
 }
 
 export function renameAlbum(albumId: string, name: string): { id: string; name: string } | null {
@@ -1735,44 +1783,77 @@ export function reorderAlbums(orderedIds: string[]): AlbumRecord[] {
     return getAlbums();
   }
 
-  const byId = new Map(database.folders.map((folder) => [folder.id, folder]));
-  const reordered: PersistedFolderNode[] = [];
+  const topLevelFolders = database.folders.filter((folder) => folder.parentId === null);
+  const topLevelById = new Map(topLevelFolders.map((folder) => [folder.id, folder]));
+  const reorderedTopLevel: PersistedFolderNode[] = [];
 
   for (const id of orderedIds) {
-    const folder = byId.get(id);
+    const folder = topLevelById.get(id);
     if (folder) {
-      reordered.push(folder);
-      byId.delete(id);
+      reorderedTopLevel.push(folder);
+      topLevelById.delete(id);
     }
   }
 
-  for (const folder of database.folders) {
-    if (byId.has(folder.id)) {
-      reordered.push(folder);
-      byId.delete(folder.id);
+  for (const folder of topLevelFolders) {
+    if (topLevelById.has(folder.id)) {
+      reorderedTopLevel.push(folder);
+      topLevelById.delete(folder.id);
     }
   }
 
   const timestamp = new Date().toISOString();
-  database.folders = reordered.map((folder, position) => ({
-    ...folder,
-    position,
-    updatedAt: timestamp,
-  }));
+  const positionsById = new Map(reorderedTopLevel.map((folder, position) => [folder.id, position]));
+  database.folders = database.folders.map((folder) => {
+    const position = positionsById.get(folder.id);
+    return typeof position === "number"
+      ? {
+          ...folder,
+          position,
+          updatedAt: timestamp,
+        }
+      : folder;
+  });
 
   saveDatabase();
   return getAlbums();
 }
 
 export function deleteAlbum(albumId: string): boolean {
-  const index = database.folders.findIndex((folder) => folder.id === albumId);
-  if (index === -1) {
+  if (!hasFolder(albumId)) {
     return false;
   }
 
-  database.folders.splice(index, 1);
-  database.folders = database.folders.map((folder, position) => ({ ...folder, position }));
-  database.memberships = database.memberships.filter((membership) => membership.folderId !== albumId);
+  const folderIdsToDelete = new Set<string>([albumId]);
+  let didGrow = true;
+  while (didGrow) {
+    didGrow = false;
+    for (const folder of database.folders) {
+      if (folder.parentId && folderIdsToDelete.has(folder.parentId) && !folderIdsToDelete.has(folder.id)) {
+        folderIdsToDelete.add(folder.id);
+        didGrow = true;
+      }
+    }
+  }
+
+  database.folders = database.folders.filter((folder) => !folderIdsToDelete.has(folder.id));
+  const siblingGroups = new Map<string, PersistedFolderNode[]>();
+  for (const folder of database.folders) {
+    const key = folder.parentId ?? "";
+    const siblings = siblingGroups.get(key) ?? [];
+    siblings.push(folder);
+    siblingGroups.set(key, siblings);
+  }
+
+  for (const siblings of siblingGroups.values()) {
+    siblings
+      .sort((left, right) => left.position - right.position)
+      .forEach((folder, position) => {
+        folder.position = position;
+      });
+  }
+
+  database.memberships = database.memberships.filter((membership) => !folderIdsToDelete.has(membership.folderId));
   saveDatabase();
   return true;
 }

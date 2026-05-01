@@ -66,12 +66,16 @@ export type DiscasaWatchedFolderImportResult = {
 
 export type AlbumRecord = {
   id: string;
+  type: "album" | "folder";
   name: string;
+  parentId: string | null;
   itemCount: number;
+  childFolderCount: number;
 };
 
 export type CreateAlbumInput = {
   name: string;
+  parentId?: string | null;
 };
 
 export type RenameAlbumInput = {
@@ -148,7 +152,7 @@ export type LibraryItemIndex = Omit<LibraryItem, "albumIds" | "contentUrl" | "th
 
 export type FolderNode = {
   id: string;
-  type: "album";
+  type: "album" | "folder";
   name: string;
   parentId: string | null;
   position: number;
@@ -231,4 +235,5 @@ export type PersistedConfigSnapshot = {
 
 export type UploadResponse = {
   uploaded: LibraryItem[];
+  albums?: AlbumRecord[];
 };

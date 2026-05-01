@@ -54,6 +54,7 @@ import {
   getGuilds,
   getLibraryItems,
   getSession,
+  inspectLocalFilePaths,
   initializeDiscasa,
   moveLibraryItemsToAlbum,
   moveToTrash,
@@ -106,6 +107,8 @@ import {
   type DiscasaBotStatus,
   type GalleryDisplayMode,
   type MouseWheelBehavior,
+  type LocalFolderUploadTarget,
+  type LocalPathInspection,
   type SettingsSection,
   type SidebarView,
   type ViewerDraftState,
@@ -190,6 +193,23 @@ function canUseInstantPreview(mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/");
 }
 
+function isTopLevelAlbum(album: AlbumRecord): boolean {
+  return album.type === "album" && album.parentId === null;
+}
+
+function mergeAlbumRecords(currentAlbums: AlbumRecord[], nextRecords: AlbumRecord[]): AlbumRecord[] {
+  if (nextRecords.length === 0) {
+    return currentAlbums;
+  }
+
+  const nextById = new Map(currentAlbums.map((album) => [album.id, album]));
+  for (const album of nextRecords) {
+    nextById.set(album.id, album);
+  }
+
+  return Array.from(nextById.values());
+}
+
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
 const MINIMIZE_TO_TRAY_KEY = "discasa.window.minimizeToTray";
@@ -259,13 +279,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isCachedAlbumRecord(value: unknown): value is AlbumRecord {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.name === "string" &&
-    typeof value.itemCount === "number"
-  );
+function normalizeCachedAlbumRecord(value: unknown): AlbumRecord | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.name !== "string" ||
+    typeof value.itemCount !== "number"
+  ) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    type: value.type === "folder" ? "folder" : "album",
+    name: value.name,
+    parentId: typeof value.parentId === "string" ? value.parentId : null,
+    itemCount: value.itemCount,
+    childFolderCount: typeof value.childFolderCount === "number" ? value.childFolderCount : 0,
+  };
 }
 
 function isCachedLibraryItem(value: unknown): value is LibraryItem {
@@ -402,7 +433,7 @@ function readCachedLibraryState(guildId: string): CachedLibraryState | null {
       guildName: typeof parsed.guildName === "string" ? parsed.guildName : null,
       sessionName: typeof parsed.sessionName === "string" ? parsed.sessionName : null,
       sessionAvatarUrl: typeof parsed.sessionAvatarUrl === "string" ? parsed.sessionAvatarUrl : null,
-      albums: parsed.albums.filter(isCachedAlbumRecord),
+      albums: parsed.albums.map(normalizeCachedAlbumRecord).filter((album): album is AlbumRecord => Boolean(album)),
       items: parsed.items.filter(isCachedLibraryItem).filter((item) => !isPendingUploadItem(item)),
       savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : "",
     };
@@ -526,6 +557,7 @@ export function App() {
   const initialCachedLibrary = readCachedLibraryState(initialActiveGuildId);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isCreateAlbumOpen, setIsCreateAlbumOpen] = useState(false);
+  const [createAlbumParentId, setCreateAlbumParentId] = useState<string | null>(null);
   const [newAlbumName, setNewAlbumName] = useState("");
   const [isCreatingAlbum, setIsCreatingAlbum] = useState(false);
   const [createAlbumError, setCreateAlbumError] = useState("");
@@ -1308,6 +1340,17 @@ export function App() {
     () => getVisibleItems(deferredItems, selectedView, duplicateItemIds),
     [deferredItems, duplicateItemIds, selectedView],
   );
+  const currentFolder = useMemo(
+    () => (selectedView.kind === "album" ? albums.find((album) => album.id === selectedView.id) ?? null : null),
+    [albums, selectedView],
+  );
+  const visibleFolders = useMemo(
+    () =>
+      selectedView.kind === "album"
+        ? albums.filter((album) => album.parentId === selectedView.id).sort((left, right) => left.name.localeCompare(right.name))
+        : [],
+    [albums, selectedView],
+  );
   const visibleItemIds = useMemo(() => visibleItems.map((item) => item.id), [visibleItems]);
   const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
   const currentDescription = useMemo(() => getCurrentDescription(selectedView), [selectedView]);
@@ -1533,14 +1576,14 @@ export function App() {
   }
 
   function getAlbumIndex(albumId: string): number {
-    return albumsRef.current.findIndex((album) => album.id === albumId);
+    return albumsRef.current.filter(isTopLevelAlbum).findIndex((album) => album.id === albumId);
   }
 
   function canMoveAlbum(albumId: string, direction: "up" | "down"): boolean {
     const index = getAlbumIndex(albumId);
     if (index === -1) return false;
     if (direction === "up") return index > 0;
-    return index < albumsRef.current.length - 1;
+    return index < albumsRef.current.filter(isTopLevelAlbum).length - 1;
   }
 
   function openLibraryView(nextView: SidebarView): void {
@@ -1575,9 +1618,10 @@ export function App() {
     void refreshDiagnostics();
   }, [isSettingsOpen, settingsSection]);
 
-  function openCreateAlbumModal(): void {
+  function openCreateAlbumModal(parentId: string | null = null): void {
     setAlbumContextMenu(null);
     setCreateAlbumError("");
+    setCreateAlbumParentId(parentId);
     setNewAlbumName("");
     setIsCreateAlbumOpen(true);
   }
@@ -1586,7 +1630,16 @@ export function App() {
     if (isCreatingAlbum) return;
     setIsCreateAlbumOpen(false);
     setCreateAlbumError("");
+    setCreateAlbumParentId(null);
     setNewAlbumName("");
+  }
+
+  function openCreateFolderModal(): void {
+    if (selectedViewRef.current.kind !== "album") {
+      return;
+    }
+
+    openCreateAlbumModal(selectedViewRef.current.id);
   }
 
   function openRenameAlbumModal(albumId: string, currentName: string): void {
@@ -1691,7 +1744,7 @@ export function App() {
 
     const trimmed = newAlbumName.trim();
     if (!trimmed) {
-      setCreateAlbumError("Enter an album name.");
+      setCreateAlbumError(createAlbumParentId ? "Enter a folder name." : "Enter an album name.");
       return;
     }
 
@@ -1699,17 +1752,20 @@ export function App() {
     setCreateAlbumError("");
 
     try {
-      const result = await createAlbum({ name: trimmed });
-      const nextAlbums = [...albumsRef.current, { id: result.id, name: trimmed, itemCount: 0 }];
+      const result = await createAlbum({ name: trimmed, parentId: createAlbumParentId });
+      const nextAlbums = mergeAlbumRecords(albumsRef.current, [result.album]);
       albumsRef.current = nextAlbums;
       setAlbums(nextAlbums);
-      setSelectedView({ kind: "album", id: result.id });
-      setMessage(`Album created: ${trimmed}`);
+      if (!createAlbumParentId) {
+        setSelectedView({ kind: "album", id: result.id });
+      }
+      setMessage(createAlbumParentId ? `Folder created: ${trimmed}` : `Album created: ${trimmed}`);
       setError("");
       setIsCreateAlbumOpen(false);
+      setCreateAlbumParentId(null);
       setNewAlbumName("");
     } catch (caughtError) {
-      setCreateAlbumError(caughtError instanceof Error ? caughtError.message : "Could not create the album.");
+      setCreateAlbumError(caughtError instanceof Error ? caughtError.message : "Could not create the folder.");
     } finally {
       setIsCreatingAlbum(false);
     }
@@ -1873,13 +1929,14 @@ export function App() {
   }
 
   async function handleMoveAlbum(albumId: string, direction: "up" | "down"): Promise<void> {
-    const currentIndex = getAlbumIndex(albumId);
+    const topLevelAlbums = albumsRef.current.filter(isTopLevelAlbum);
+    const currentIndex = topLevelAlbums.findIndex((album) => album.id === albumId);
     if (currentIndex === -1) return;
 
     const targetIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
-    if (targetIndex < 0 || targetIndex >= albumsRef.current.length) return;
+    if (targetIndex < 0 || targetIndex >= topLevelAlbums.length) return;
 
-    const nextAlbums = [...albumsRef.current];
+    const nextAlbums = [...topLevelAlbums];
     const [moved] = nextAlbums.splice(currentIndex, 1);
     nextAlbums.splice(targetIndex, 0, moved);
 
@@ -1900,21 +1957,33 @@ export function App() {
     if (!deleteAlbumTarget) return;
 
     const { id: albumId, name: albumName } = deleteAlbumTarget;
+    const deletedFolderIds = new Set<string>([albumId]);
+    let didGrow = true;
+    while (didGrow) {
+      didGrow = false;
+      for (const album of albumsRef.current) {
+        if (album.parentId && deletedFolderIds.has(album.parentId) && !deletedFolderIds.has(album.id)) {
+          deletedFolderIds.add(album.id);
+          didGrow = true;
+        }
+      }
+    }
+
     setIsDeletingAlbum(true);
     setDeleteAlbumError("");
 
     try {
       await deleteAlbum(albumId);
-      const nextAlbums = albumsRef.current.filter((album) => album.id !== albumId);
+      const nextAlbums = albumsRef.current.filter((album) => !deletedFolderIds.has(album.id));
       albumsRef.current = nextAlbums;
       setAlbums(nextAlbums);
       setItems((current) =>
         current.map((item) => ({
           ...item,
-          albumIds: item.albumIds.filter((id) => id !== albumId),
+          albumIds: item.albumIds.filter((id) => !deletedFolderIds.has(id)),
         })),
       );
-      setSelectedView((current) => (current.kind === "album" && current.id === albumId ? { kind: "library", id: "all-files" } : current));
+      setSelectedView((current) => (current.kind === "album" && deletedFolderIds.has(current.id) ? { kind: "library", id: "all-files" } : current));
       setDeleteAlbumTarget(null);
       setAlbumContextMenu(null);
       setMessage(`Album deleted: ${albumName}`);
@@ -2168,6 +2237,7 @@ export function App() {
 
   async function commitUploadedFolderFiles(files: File[]): Promise<void> {
     const groups = new Map<string, File[]>();
+    const parentFolderId = selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : null;
 
     for (const file of files) {
       const relativePath = file.webkitRelativePath || file.name;
@@ -2183,8 +2253,11 @@ export function App() {
 
     let uploadedCount = 0;
     for (const [folderName, groupFiles] of groups.entries()) {
-      const created = await createAlbum({ name: folderName });
+      const created = await createAlbum({ name: folderName, parentId: parentFolderId });
       const targetAlbumId = created.id;
+      const nextAlbums = mergeAlbumRecords(albumsRef.current, [created.album]);
+      albumsRef.current = nextAlbums;
+      setAlbums(nextAlbums);
       const pendingItems = groupFiles.map((file) => {
         const mimeType = file.type || inferMimeTypeFromName(file.name);
         const previewObjectUrl = canUseInstantPreview(mimeType) ? URL.createObjectURL(file) : undefined;
@@ -2220,32 +2293,83 @@ export function App() {
 
   async function commitUploadedLocalPaths(filePaths: string[], albumId?: string): Promise<void> {
     const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
-    const pendingItems = filePaths.map((filePath) => {
-      const fileName = getFileNameFromPath(filePath);
-      const mimeType = inferMimeTypeFromName(fileName);
-      const previewUrl = canUseInstantPreview(mimeType) ? convertFileSrc(filePath) : undefined;
+    const inspectedPaths = await inspectLocalFilePaths(filePaths);
+    const folderTargets: LocalFolderUploadTarget[] = [];
+    const pendingItems: PendingUploadItem[] = [];
+    const clientUploadIds = new Array<string | undefined>(filePaths.length).fill(undefined);
+    const pendingRecords: PendingUploadRecord[] = [];
 
-      return createPendingUploadItem({
+    for (const [index, filePath] of filePaths.entries()) {
+      const inspected: LocalPathInspection | null = inspectedPaths[index] ?? null;
+
+      if (inspected?.isDirectory) {
+        const created = await createAlbum({ name: inspected.name || getFileNameFromPath(filePath), parentId: targetAlbumId ?? null });
+        folderTargets.push({ path: inspected.path, albumId: created.id });
+        const nextAlbums = mergeAlbumRecords(albumsRef.current, [created.album]);
+        albumsRef.current = nextAlbums;
+        setAlbums(nextAlbums);
+        continue;
+      }
+
+      if (inspected && !inspected.isFile) {
+        continue;
+      }
+
+      const sourcePath = inspected?.path ?? filePath;
+      const fileName = inspected?.name || getFileNameFromPath(sourcePath);
+      const mimeType = inferMimeTypeFromName(fileName);
+      const previewUrl = canUseInstantPreview(mimeType) ? convertFileSrc(sourcePath) : undefined;
+      const pendingItem = createPendingUploadItem({
         name: fileName,
         size: 0,
         mimeType,
         targetAlbumId,
         previewUrl,
-        sourcePath: filePath,
+        sourcePath,
       });
-    });
 
-    upsertPendingUploadRecords(pendingItems.map((pendingItem, index) => createPendingUploadRecord(pendingItem, filePaths[index] ?? "")));
-    addPendingUploadItems(pendingItems);
+      pendingItems.push(pendingItem);
+      pendingRecords.push(createPendingUploadRecord(pendingItem, sourcePath));
+      clientUploadIds[index] = pendingItem.id;
+    }
+
+    upsertPendingUploadRecords(pendingRecords);
+    if (pendingItems.length > 0) {
+      addPendingUploadItems(pendingItems);
+    } else if (folderTargets.length > 0) {
+      setMessage(`${folderTargets.length} folder(s) queued.`);
+      setError("");
+    }
+
     try {
       const result = await uploadLocalFilePaths(
         filePaths,
         targetAlbumId,
-        pendingItems.map((item) => item.id),
+        clientUploadIds,
+        folderTargets,
       );
-      await finalizePendingUploadItems(pendingItems, result.uploaded, targetAlbumId);
+      if (result.albums) {
+        albumsRef.current = result.albums;
+        setAlbums(result.albums);
+      }
+
+      if (pendingItems.length > 0) {
+        const uploadedItemsById = new Map(result.uploaded.map((item) => [item.id, item]));
+        const pendingUploads = pendingItems
+          .map((pendingItem) => uploadedItemsById.get(pendingItem.id) ?? null)
+          .filter((item): item is LibraryItem => Boolean(item));
+        await finalizePendingUploadItems(pendingItems, pendingUploads, targetAlbumId);
+      } else {
+        await refreshLibraryAfterUpload(result.uploaded.length, targetAlbumId);
+      }
+
+      if (folderTargets.length > 0 && result.uploaded.length > 0) {
+        setMessage(`${result.uploaded.length} file(s) added from folder upload.`);
+      }
     } catch (caughtError) {
-      markPendingUploadItemsInterrupted(pendingItems);
+      if (pendingItems.length > 0) {
+        markPendingUploadItemsInterrupted(pendingItems);
+      }
       throw caughtError;
     }
   }
@@ -3020,10 +3144,12 @@ export function App() {
             title={currentTitle}
             description={currentDescription}
             items={visibleItems}
+            folders={visibleFolders}
             attachmentWarnings={attachmentWarnings}
             selectedItemIds={selectedItemIds}
             draggingItemIds={draggingLibraryItemIds}
             currentAlbumId={selectedView.kind === "album" ? selectedView.id : null}
+            parentFolderId={currentFolder?.parentId ?? null}
             canMoveSelectedItems={albums.length > 0}
             isBusy={isBusy}
             isDraggingFiles={isDraggingFiles}
@@ -3044,6 +3170,19 @@ export function App() {
             }}
             onRequestFolderUpload={() => {
               void requestFolderUpload();
+            }}
+            onRequestCreateFolder={openCreateFolderModal}
+            onOpenFolder={(folderId) => {
+              setSelectedView({ kind: "album", id: folderId });
+              setSelectedItemIds([]);
+              selectionAnchorRef.current = null;
+            }}
+            onGoUpFolder={() => {
+              if (currentFolder?.parentId) {
+                setSelectedView({ kind: "album", id: currentFolder.parentId });
+                setSelectedItemIds([]);
+                selectionAnchorRef.current = null;
+              }
             }}
             onDragEnter={handleFileDragEnter}
             onDragLeave={handleFileDragLeave}
@@ -3167,6 +3306,14 @@ export function App() {
           isCreatingAlbum={isCreatingAlbum}
           newAlbumName={newAlbumName}
           createAlbumError={createAlbumError}
+          title={createAlbumParentId ? "New folder" : "New album"}
+          description={
+            createAlbumParentId
+              ? "Choose a name for the new folder inside the current album."
+              : "Choose a name for the new folder in the Albums section."
+          }
+          label={createAlbumParentId ? "Folder name" : "Album name"}
+          placeholder={createAlbumParentId ? "Enter the folder name" : "Enter the album name"}
           inputRef={createAlbumInputRef}
           onClose={closeCreateAlbumModal}
           onSubmit={handleCreateAlbumSubmit}

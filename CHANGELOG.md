@@ -2,6 +2,19 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-nested-album-folders]
+
+### Added
+
+- Added nested folder creation inside albums and folders.
+- Added gallery folder tiles with parent-folder navigation.
+- Added immediate folder creation for selected local directories before upload processing finishes.
+
+### Changed
+
+- Folder uploads now create root albums only from the library root; uploads from inside an album become child folders.
+- The sidebar now shows only root albums, while nested folders stay inside the gallery hierarchy.
+
 ## [2026-05-01-touch-titlebar-stop-fix]
 
 ### Fixed

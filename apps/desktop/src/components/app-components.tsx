@@ -522,6 +522,10 @@ type AlbumModalProps = {
   isCreatingAlbum: boolean;
   newAlbumName: string;
   createAlbumError: string;
+  title: string;
+  description: string;
+  label: string;
+  placeholder: string;
   inputRef: RefObject<HTMLInputElement | null>;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -532,6 +536,10 @@ export function AlbumModal({
   isCreatingAlbum,
   newAlbumName,
   createAlbumError,
+  title,
+  description,
+  label,
+  placeholder,
   inputRef,
   onClose,
   onSubmit,
@@ -542,7 +550,7 @@ export function AlbumModal({
       rootClassName="album-modal-root"
       backdropClassName="album-modal-backdrop"
       panelClassName="album-modal"
-      ariaLabel="Create new album"
+      ariaLabel={title}
       showCloseButton
       closeButtonClassName="album-modal-close"
       closeButtonAriaLabel="Close album creation"
@@ -550,13 +558,13 @@ export function AlbumModal({
     >
       <form className="album-modal-content" onSubmit={(event) => void onSubmit(event)}>
         <div className="album-modal-header">
-          <h2>New album</h2>
-          <p>Choose a name for the new folder in the Albums section.</p>
+          <h2>{title}</h2>
+          <p>{description}</p>
         </div>
 
         <div className="album-modal-field">
           <label className="album-modal-label" htmlFor="new-album-name">
-            Album name
+            {label}
           </label>
           <input
             ref={inputRef}
@@ -565,7 +573,7 @@ export function AlbumModal({
             type="text"
             value={newAlbumName}
             onChange={(event) => onChangeName(event.currentTarget.value)}
-            placeholder="Enter the album name"
+            placeholder={placeholder}
             autoComplete="off"
             spellCheck={false}
             disabled={isCreatingAlbum}
@@ -1402,10 +1410,12 @@ type GalleryProps = {
   title: string;
   description: string;
   items: LibraryItem[];
+  folders: AlbumRecord[];
   attachmentWarnings: DiscasaAttachmentRecoveryWarning[];
   selectedItemIds: string[];
   draggingItemIds: string[];
   currentAlbumId: string | null;
+  parentFolderId: string | null;
   canMoveSelectedItems: boolean;
   isBusy: boolean;
   isDraggingFiles: boolean;
@@ -1423,6 +1433,9 @@ type GalleryProps = {
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
   onRequestUpload: () => void;
   onRequestFolderUpload: () => void;
+  onRequestCreateFolder: () => void;
+  onOpenFolder: (folderId: string) => void;
+  onGoUpFolder: () => void;
   onDragEnter: (event: DragEvent<HTMLElement>) => void;
   onDragLeave: (event: DragEvent<HTMLElement>) => void;
   onDragOver: (event: DragEvent<HTMLElement>) => void;
@@ -1445,6 +1458,8 @@ type GalleryProps = {
 };
 
 type LibraryToolbarProps = {
+  currentAlbumId: string | null;
+  parentFolderId: string | null;
   galleryDisplayMode: GalleryDisplayMode;
   thumbnailZoomIndex: number;
   thumbnailZoomLevelCount: number;
@@ -1455,6 +1470,8 @@ type LibraryToolbarProps = {
   onToggleGalleryDisplayMode: () => void;
   onRequestUpload: () => void;
   onRequestFolderUpload: () => void;
+  onRequestCreateFolder: () => void;
+  onGoUpFolder: () => void;
 };
 
 type SelectionBox = {
@@ -1492,6 +1509,7 @@ type InternalItemDragPreviewState = {
 };
 
 type GalleryGridProps = {
+  folders: AlbumRecord[];
   items: LibraryItem[];
   isBusy: boolean;
   displayMode: GalleryDisplayMode;
@@ -1499,6 +1517,7 @@ type GalleryGridProps = {
   selectedItemIds: string[];
   draggingItemIds: string[];
   onSelectItem: (itemId: string, options: { range: boolean; toggle: boolean }) => void;
+  onOpenFolder: (folderId: string) => void;
   onOpenItem: (itemId: string) => void;
   onClearSelection: () => void;
   onApplySelectionRect: (itemIds: string[], mode: "replace" | "add") => void;
@@ -1511,6 +1530,11 @@ type GalleryGridProps = {
   onCancelInternalItemDrag: () => void;
   onRequestUpload: () => void;
   onRequestFolderUpload: () => void;
+};
+
+type GalleryFolderTileProps = {
+  folder: AlbumRecord;
+  onOpenFolder: (folderId: string) => void;
 };
 
 type GalleryItemProps = {
@@ -1770,6 +1794,8 @@ function stopActionEvent(event: ReactMouseEvent<HTMLButtonElement> | ReactPointe
 }
 
 function LibraryToolbar({
+  currentAlbumId,
+  parentFolderId,
   galleryDisplayMode,
   thumbnailZoomIndex,
   thumbnailZoomLevelCount,
@@ -1780,6 +1806,8 @@ function LibraryToolbar({
   onToggleGalleryDisplayMode,
   onRequestUpload,
   onRequestFolderUpload,
+  onRequestCreateFolder,
+  onGoUpFolder,
 }: LibraryToolbarProps) {
   function handleThumbnailZoomChange(event: ChangeEvent<HTMLInputElement>): void {
     onThumbnailZoomIndexChange(Number(event.currentTarget.value));
@@ -1790,6 +1818,12 @@ function LibraryToolbar({
   return (
     <div className="library-tools">
       <div className={`library-view-controls ${bulkActions ? "has-bulk-actions" : ""}`}>
+        {parentFolderId ? (
+          <button type="button" className="icon-circle-button upload-button" onClick={onGoUpFolder} aria-label="Back" title="Back">
+            <ArrowLeftIcon />
+          </button>
+        ) : null}
+
         <label
           className="thumbnail-zoom-control compact"
           title={`Thumbnail zoom: ${thumbnailZoomPercent}%`}
@@ -1833,6 +1867,18 @@ function LibraryToolbar({
         >
           <FolderIcon />
         </button>
+
+        {currentAlbumId ? (
+          <button
+            type="button"
+            className="icon-circle-button upload-button"
+            onClick={onRequestCreateFolder}
+            aria-label="Create folder"
+            title="Create folder"
+          >
+            <PlusIcon />
+          </button>
+        ) : null}
 
         {bulkActions}
       </div>
@@ -1952,6 +1998,30 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   );
 }
 
+function GalleryFolderTile({ folder, onOpenFolder }: GalleryFolderTileProps) {
+  const childLabel = folder.childFolderCount > 0 ? `, ${folder.childFolderCount} folder${folder.childFolderCount === 1 ? "" : "s"}` : "";
+
+  return (
+    <button
+      type="button"
+      className="folder-tile"
+      data-album-drop-id={folder.id}
+      title={folder.name}
+      onClick={() => onOpenFolder(folder.id)}
+    >
+      <span className="folder-tile-preview" aria-hidden="true">
+        <FolderIcon />
+      </span>
+      <span className="file-meta compact folder-tile-meta">
+        <span className="file-name">{folder.name}</span>
+        <small className="file-size">
+          {folder.itemCount} file{folder.itemCount === 1 ? "" : "s"}{childLabel}
+        </small>
+      </span>
+    </button>
+  );
+}
+
 function GalleryItem({
   item,
   isSelected,
@@ -1987,6 +2057,7 @@ function GalleryItem({
 }
 
 function GalleryGrid({
+  folders,
   items,
   isBusy,
   displayMode,
@@ -1994,6 +2065,7 @@ function GalleryGrid({
   selectedItemIds,
   draggingItemIds,
   onSelectItem,
+  onOpenFolder,
   onOpenItem,
   onClearSelection,
   onApplySelectionRect,
@@ -2240,9 +2312,10 @@ function GalleryGrid({
 
     if (
       event.button !== 0 ||
+      target?.closest(".folder-tile") ||
       target?.closest(".file-tile") ||
       target?.closest(".empty-state") ||
-      items.length === 0
+      (items.length === 0 && folders.length === 0)
     ) {
       return;
     }
@@ -2340,6 +2413,10 @@ function GalleryGrid({
       style={{ "--file-card-width": `${thumbnailSize}px` } as CSSProperties}
       onPointerDown={handleGridPointerDown}
     >
+      {folders.map((folder) => (
+        <GalleryFolderTile key={folder.id} folder={folder} onOpenFolder={onOpenFolder} />
+      ))}
+
       {items.map((item) => (
         <GalleryItem
           key={item.id}
@@ -2370,7 +2447,7 @@ function GalleryGrid({
         />
       ) : null}
 
-      {items.length === 0 && !isBusy ? (
+      {items.length === 0 && folders.length === 0 && !isBusy ? (
         <button type="button" className="empty-state" onClick={onRequestUpload}>
           <span className="drop-illustration">
             <CloudUploadIcon />
@@ -2390,10 +2467,12 @@ export function Gallery({
   title,
   description,
   items,
+  folders,
   attachmentWarnings,
   selectedItemIds,
   draggingItemIds,
   currentAlbumId,
+  parentFolderId,
   canMoveSelectedItems,
   isBusy,
   isDraggingFiles,
@@ -2411,6 +2490,9 @@ export function Gallery({
   onApplySelectionRect,
   onRequestUpload,
   onRequestFolderUpload,
+  onRequestCreateFolder,
+  onOpenFolder,
+  onGoUpFolder,
   onDragEnter,
   onDragLeave,
   onDragOver,
@@ -2791,6 +2873,8 @@ export function Gallery({
         </div>
 
         <LibraryToolbar
+          currentAlbumId={currentAlbumId}
+          parentFolderId={parentFolderId}
           galleryDisplayMode={galleryDisplayMode}
           thumbnailZoomIndex={thumbnailZoomIndex}
           thumbnailZoomLevelCount={thumbnailZoomLevelCount}
@@ -2801,10 +2885,13 @@ export function Gallery({
           onToggleGalleryDisplayMode={onToggleGalleryDisplayMode}
           onRequestUpload={onRequestUpload}
           onRequestFolderUpload={onRequestFolderUpload}
+          onRequestCreateFolder={onRequestCreateFolder}
+          onGoUpFolder={onGoUpFolder}
         />
       </div>
 
       <GalleryGrid
+        folders={folders}
         items={displayItems}
         isBusy={isBusy}
         displayMode={galleryDisplayMode}
@@ -2812,6 +2899,7 @@ export function Gallery({
         selectedItemIds={selectedItemIds}
         draggingItemIds={draggingItemIds}
         onSelectItem={onSelectItem}
+        onOpenFolder={onOpenFolder}
         onOpenItem={handleOpenViewer}
         onClearSelection={onClearSelection}
         onApplySelectionRect={onApplySelectionRect}
@@ -4391,6 +4479,7 @@ export function Sidebar({
 
     return true;
   });
+  const sidebarAlbums = albums.filter((album) => album.type === "album" && album.parentId === null);
 
   return (
     <aside className={`sidebar-panel panel-surface ${isSidebarCollapsed ? "collapsed" : ""}`}>
@@ -4444,7 +4533,7 @@ export function Sidebar({
         <section className="sidebar-section">
           {!isSidebarCollapsed ? <h2 className="sidebar-section-title">Albums</h2> : null}
 
-          {albums.map((album) => (
+          {sidebarAlbums.map((album) => (
             <button
               key={album.id}
               type="button"
@@ -4469,7 +4558,7 @@ export function Sidebar({
             <button
               type="button"
               className="sidebar-item"
-              onClick={onOpenCreateAlbum}
+              onClick={() => onOpenCreateAlbum()}
               title="Create album"
             >
               <span className="sidebar-item-icon"><PlusIcon /></span>

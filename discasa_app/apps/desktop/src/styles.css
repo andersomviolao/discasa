@@ -85,7 +85,7 @@
   --opacity-disabled-strong: 0.42;
   --opacity-disabled-soft: 0.34;
   --z-base: 1;
-  --z-titlebar: 2;
+  --z-titlebar: 140;
   --z-popover: 40;
   --z-context-menu: 50;
   --z-toast: 80;
@@ -134,9 +134,9 @@
   --color-cyan: #00ffff;
   --color-blue: #0000ff;
   --color-magenta: #ff00ff;
-  --accent-color: #E9881D;
-  --accent-rgb: 233, 136, 29;
-  --accent-color-hover: #ED9A40;
+  --accent-color: #5865f2;
+  --accent-rgb: 88, 101, 242;
+  --accent-color-hover: #6975f5;
   --accent-alpha-06: rgba(var(--accent-rgb), 0.06);
   --accent-alpha-10: rgba(var(--accent-rgb), 0.10);
   --accent-alpha-14: rgba(var(--accent-rgb), 0.14);
@@ -190,8 +190,8 @@
   --surface-switch: var(--white-alpha-16);
   --surface-modal: rgba(15, 18, 26, 0.98);
   --surface-overlay: rgba(18, 19, 22, 0.9);
-  --surface-backdrop: rgba(4, 7, 12, 0.68);
-  --surface-backdrop-strong: rgba(4, 7, 12, 0.72);
+  --surface-backdrop: rgba(4, 7, 12, 0.76);
+  --surface-backdrop-strong: rgba(4, 7, 12, 0.8);
   --surface-chip-strong: rgba(8, 14, 24, 0.76);
   --surface-empty: rgba(22, 23, 26, 0.46);
   --surface-toast: rgba(8, 11, 16, 0.95);
@@ -201,7 +201,7 @@
   --surface-popover: rgba(14, 18, 28, 0.98);
   --surface-auth-modal-top: rgba(17, 22, 34, 0.98);
   --surface-auth-modal-bottom: rgba(10, 14, 24, 0.98);
-  --surface-auth-backdrop: rgba(3, 6, 12, 0.76);
+  --surface-auth-backdrop: rgba(4, 7, 12, 0.8);
   --surface-media-backdrop: rgba(3, 7, 14, 0.84);
   --surface-media-modal: rgba(11, 16, 26, 0.96);
   --surface-media-stage-bottom: rgba(4, 8, 15, 0.98);
@@ -997,10 +997,11 @@ img {
 .settings-modal-root,
 .album-modal-root {
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-height) 0 0;
   z-index: var(--z-modal);
   display: grid;
   place-items: center;
+  padding: var(--size-20);
   animation: modal-root-fade 160ms ease-out both;
 }
 
@@ -1012,22 +1013,22 @@ img {
 .album-modal-backdrop {
   position: absolute;
   inset: 0;
-  background: var(--surface-backdrop);
-  backdrop-filter: blur(var(--blur-3));
+  background: var(--surface-backdrop-strong);
+  backdrop-filter: blur(var(--blur-8));
   cursor: default;
   animation: modal-backdrop-fade 180ms ease-out both;
 }
 
 .album-modal-backdrop {
   background: var(--surface-backdrop-strong);
-  backdrop-filter: blur(var(--blur-4));
+  backdrop-filter: blur(var(--blur-8));
 }
 
 .settings-modal {
   position: relative;
   z-index: var(--z-base);
-  width: min(var(--size-1080), calc(100vw - var(--size-72)));
-  height: min(var(--size-760), calc(100vh - var(--size-84)));
+  width: min(var(--size-1080), calc(100vw - var(--size-40)));
+  height: min(var(--size-760), calc(100vh - var(--titlebar-height) - var(--size-40)));
   display: grid;
   grid-template-columns: var(--size-248) minmax(0, 1fr);
   border-radius: var(--radius-xl);
@@ -1036,6 +1037,14 @@ img {
   background: var(--surface-modal);
   box-shadow: var(--shadow-modal);
   animation: modal-panel-enter 180ms ease-out both;
+}
+
+.settings-modal .pill-button,
+.album-modal .pill-button,
+.auth-setup-modal .pill-button {
+  min-height: var(--size-44);
+  min-width: var(--size-104);
+  padding-inline: var(--size-18);
 }
 
 .settings-modal-sidebar {
@@ -1803,7 +1812,7 @@ img {
 @media (max-width: 980px) {
   .settings-modal {
     width: min(var(--size-960), calc(100vw - var(--size-32)));
-    height: min(var(--size-760), calc(100vh - var(--size-32)));
+    height: min(var(--size-760), calc(100vh - var(--titlebar-height) - var(--size-32)));
     grid-template-columns: var(--size-210) minmax(0, 1fr);
   }
 }
@@ -1852,11 +1861,16 @@ img {
 }
 
 .auth-setup-modal-root {
+  --accent-color: #5865f2;
+  --accent-rgb: 88, 101, 242;
+  --accent-color-hover: #6975f5;
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-height) 0 0;
   z-index: var(--z-auth-setup);
   display: grid;
   place-items: center;
+  padding: var(--size-20);
+  animation: modal-root-fade 160ms ease-out both;
 }
 
 .auth-setup-modal-backdrop {
@@ -1864,17 +1878,20 @@ img {
   inset: 0;
   background: var(--surface-auth-backdrop);
   backdrop-filter: blur(var(--blur-8));
+  animation: modal-backdrop-fade 180ms ease-out both;
 }
 
 .auth-setup-modal {
   position: relative;
   z-index: var(--z-base);
   width: min(var(--size-640), calc(100vw - var(--size-40)));
-  border-radius: var(--size-26);
-  border: var(--size-1) solid var(--white-alpha-08);
+  max-height: min(var(--size-760), calc(100vh - var(--titlebar-height) - var(--size-40)));
+  border-radius: var(--radius-2xl);
+  border: var(--size-1) solid var(--border-soft);
   background: var(--gradient-auth-modal);
   box-shadow: var(--shadow-auth-modal);
   overflow: hidden;
+  animation: modal-panel-enter 180ms ease-out both;
 }
 
 .auth-setup-shell {
@@ -1918,14 +1935,15 @@ img {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: var(--size-12);
+  gap: var(--size-10);
+  flex-wrap: wrap;
 }
 
 .auth-setup-actions.spaced {
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
-.auth-setup-actions .primary-button:disabled {
+.auth-setup-actions .pill-button:disabled {
   opacity: var(--opacity-disabled);
   cursor: default;
 }
@@ -2566,6 +2584,22 @@ img {
   letter-spacing: 0.04em;
 }
 
+.file-processing-badge {
+  position: absolute;
+  left: var(--size-10);
+  bottom: var(--size-10);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--size-22);
+  padding: 0 var(--size-8);
+  border-radius: var(--radius-pill);
+  background: var(--surface-chip-strong);
+  color: var(--text-primary);
+  font-size: var(--font-size-micro);
+  letter-spacing: 0.04em;
+}
+
 .file-meta.compact {
   padding: 0 var(--size-2);
   border-top: none;
@@ -2776,10 +2810,11 @@ img {
 
 .media-viewer-root {
   position: fixed;
-  inset: 0;
+  inset: var(--titlebar-height) 0 0;
   z-index: var(--z-media-viewer);
   display: grid;
   place-items: center;
+  padding: var(--size-20);
 }
 
 .media-viewer-backdrop {
@@ -2793,7 +2828,7 @@ img {
   position: relative;
   z-index: var(--z-base);
   width: min(var(--size-1320), calc(100vw - var(--size-40)));
-  height: min(var(--size-860), calc(100vh - var(--size-40)));
+  height: min(var(--size-860), calc(100vh - var(--titlebar-height) - var(--size-40)));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   border-radius: var(--size-28);
@@ -3197,7 +3232,7 @@ img {
 
   .media-viewer-modal {
     width: min(100vw - var(--size-24), var(--size-1320));
-    height: min(100vh - var(--size-24), var(--size-860));
+    height: min(100vh - var(--titlebar-height) - var(--size-24), var(--size-860));
   }
 
   .media-viewer-heading-meta {

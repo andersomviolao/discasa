@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import type {
@@ -16,6 +18,7 @@ import {
   addMockFiles,
   addUploadedFiles,
   adoptLocalMirrorImportedFiles,
+  cacheUploadedLocalFilesForLocalAccess,
   cacheUploadedFilesForLocalAccess,
   clearPersistedAuthSession,
   createConfigSnapshot,
@@ -31,6 +34,7 @@ import {
   getLibraryItem,
   getLibraryItems,
   getLocalStorageStatus,
+  type LocalSourceFile,
   moveLibraryItemsToAlbum,
   renameAlbum,
   removeLibraryItemsFromAlbum,
@@ -88,6 +92,79 @@ const BOT_INVITE_PERMISSIONS =
   0x10000n + // Read Message History
   0x10n + // Manage Channels
   0x10000000n; // Manage Roles
+
+function inferMimeTypeFromFileName(fileName: string): string {
+  const extension = path.extname(fileName).toLowerCase();
+  const knownTypes: Record<string, string> = {
+    ".apng": "image/apng",
+    ".avif": "image/avif",
+    ".gif": "image/gif",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".json": "application/json",
+    ".zip": "application/zip",
+  };
+
+  return knownTypes[extension] ?? "application/octet-stream";
+}
+
+function readClientUploadIds(rawIds: unknown, expectedLength: number): Array<string | undefined> {
+  if (!Array.isArray(rawIds)) {
+    return [];
+  }
+
+  return rawIds.slice(0, expectedLength).map((rawId) => {
+    if (typeof rawId !== "string") {
+      return undefined;
+    }
+
+    const trimmed = rawId.trim();
+    return trimmed.length > 0 && trimmed.length <= 120 ? trimmed : undefined;
+  });
+}
+
+async function readLocalSourceFiles(rawPaths: unknown): Promise<LocalSourceFile[]> {
+  if (!Array.isArray(rawPaths)) {
+    throw new Error("filePaths must be an array.");
+  }
+
+  const files: LocalSourceFile[] = [];
+
+  for (const rawPath of rawPaths) {
+    if (typeof rawPath !== "string" || rawPath.length === 0) {
+      continue;
+    }
+
+    const filePath = path.resolve(rawPath);
+    const stat = await fs.stat(filePath);
+
+    if (!stat.isFile()) {
+      continue;
+    }
+
+    const fileName = path.basename(filePath);
+    files.push({
+      filePath,
+      fileName,
+      fileSize: stat.size,
+      mimeType: inferMimeTypeFromFileName(fileName),
+      modifiedAt: stat.mtime.toISOString(),
+    });
+  }
+
+  return files;
+}
 
 function getRemoteLibraryHydrationKey(context: NonNullable<ReturnType<typeof getActiveStorageContext>>): string {
   return [
@@ -918,6 +995,52 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
     const uploadedRecords = await uploadFilesToDiscordDrive(files, activeStorage);
     const uploaded = addUploadedFiles(uploadedRecords, albumId);
     cacheUploadedFilesForLocalAccess(uploaded, files);
+    await syncRemoteLibraryState();
+    response.status(201).json({ uploaded });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/upload-local", async (request, response, next) => {
+  try {
+    const files = await readLocalSourceFiles(request.body.filePaths);
+    const albumId = typeof request.body.albumId === "string" && request.body.albumId.length > 0 ? request.body.albumId : undefined;
+    const clientUploadIds = readClientUploadIds(request.body.clientUploadIds, files.length);
+
+    if (!files.length) {
+      response.status(400).json({ error: "At least one readable local file is required" });
+      return;
+    }
+
+    const records = env.mockMode
+      ? files.map((file) => ({
+          fileName: file.fileName,
+          fileSize: file.fileSize,
+          mimeType: file.mimeType,
+          guildId: getActiveStorageContext()?.guildId ?? "mock_active_guild",
+          attachmentUrl: `mock://uploads/${encodeURIComponent(file.fileName)}`,
+          uploadedAt: file.modifiedAt,
+        }))
+      : await uploadLocalFilesToDiscordDrive(
+          files,
+          (() => {
+            const activeStorage = getActiveStorageContext();
+
+            if (!activeStorage) {
+              throw new Error("Apply a Discord server in Settings before uploading files.");
+            }
+
+            return activeStorage;
+          })(),
+        );
+
+    const recordsWithClientIds = records.map((record, index) => ({
+      ...record,
+      itemId: clientUploadIds[index],
+    }));
+    const uploaded = addUploadedFiles(recordsWithClientIds, albumId);
+    cacheUploadedLocalFilesForLocalAccess(uploaded, files);
     await syncRemoteLibraryState();
     response.status(201).json({ uploaded });
   } catch (error) {

@@ -167,7 +167,7 @@ export type DiscasaConfig = {
 };
 
 export const DISCASA_DEFAULT_CONFIG: DiscasaConfig = {
-  accentColor: "#E9881D",
+  accentColor: "#5865F2",
   minimizeToTray: false,
   closeToTray: false,
   thumbnailZoomPercent: 35,

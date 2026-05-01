@@ -754,6 +754,17 @@ export async function uploadFiles(files: File[], albumId?: string): Promise<Uplo
   });
 }
 
+export async function uploadLocalFilePaths(
+  filePaths: string[],
+  albumId?: string,
+  clientUploadIds?: string[],
+): Promise<UploadResponse> {
+  return requestJson<UploadResponse>("/api/upload-local", {
+    method: "POST",
+    body: JSON.stringify({ filePaths, albumId, clientUploadIds }),
+  });
+}
+
 export async function importExternalLibraryFiles(): Promise<DiscasaExternalImportResult> {
   return requestJson<DiscasaExternalImportResult>("/api/library/import-external-files", {
     method: "POST",

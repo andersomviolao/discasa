@@ -1814,12 +1814,12 @@ function LibraryToolbar({
           <GalleryModeIcon mode={galleryDisplayMode} />
         </button>
 
+        <button type="button" className="icon-circle-button upload-button" onClick={onRequestUpload} aria-label="Upload" title="Upload">
+          <UploadIcon />
+        </button>
+
         {bulkActions}
       </div>
-
-      <button type="button" className="icon-circle-button upload-button" onClick={onRequestUpload} aria-label="Upload" title="Upload">
-        <UploadIcon />
-      </button>
     </div>
   );
 }
@@ -1928,6 +1928,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
           </div>
         ) : null}
 
+        {item.status === "Processing upload" ? <span className="file-processing-badge">Processing</span> : null}
         {hasSavedEdit ? <span style={editedBadgeStyle}>Edited</span> : null}
         <div className="file-preview-actions">{actions}</div>
       </div>
@@ -2685,19 +2686,6 @@ export function Gallery({
           title={item.isFavorite ? "Unfavorite" : "Favorite"}
         >
           <HeartIcon />
-        </button>
-        <button
-          type="button"
-          className="file-icon-button danger"
-          onPointerDown={stopActionEvent}
-          onClick={(event) => {
-            stopActionEvent(event);
-            void onMoveToTrash(item.id);
-          }}
-          aria-label="Move to trash"
-          title="Move to trash"
-        >
-          <TrashIcon />
         </button>
       </>
     );

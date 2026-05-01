@@ -22,10 +22,11 @@ Discasa currently includes:
 - optional local mirroring, with automatic import of files placed directly in the mirror folder;
 - a fixed `10 MiB` limit for each upload sent to Discord;
 - automatic chunking for files larger than `10 MiB`;
+- instant upload previews for local desktop uploads, with recovery after app shutdowns or interrupted connections;
 - index, folder, and config snapshots stored in Discord;
 - runtime language switching between English and Portuguese;
 - local app and hosted bot diagnostics in Settings;
-- a login/install flow with a dynamic synchronization screen;
+- a login/install flow with Discord-blue styling, a dynamic synchronization screen, and consistent modal overlays;
 - local cache for the library, files, and thumbnails.
 
 ## Architecture Summary
@@ -67,6 +68,7 @@ Discasa
 The app owns product rules and coordination:
 
 - chunking and large-file manifests;
+- optimistic upload previews and pending-upload recovery;
 - known attachment comparison and filtering;
 - automatic external file import;
 - snapshot recovery and relinking;
@@ -107,6 +109,14 @@ Older installations can have legacy `discasa-folder` and `discasa-config` channe
 Discasa always uses a fixed `10 MiB` Discord upload limit, even when a server currently accepts larger files because of boosts or plan changes. This prevents storage from breaking if the server is downgraded later.
 
 Files larger than `10 MiB` are split by the app into smaller parts and registered in a `chunked` manifest. Reading and reconstruction are coordinated by the app.
+
+## Upload Previews and Recovery
+
+In the Tauri desktop app, files selected from the native file picker or dropped from the operating system are sent to the local backend by path through `/api/upload-local`. The WebView does not load the whole file into memory before upload.
+
+The interface creates a temporary library item immediately, so the user can preview supported media, favorite it, move it to a folder, remove it from a folder, or move it to trash while the backend uploads and chunks the file. For local path uploads, pending items are stored in a small recovery queue in local storage. If Discasa closes, the connection drops, or the machine loses power, the next startup restores the pending items and retries the upload. The backend accepts the client-generated upload id, which prevents duplicate library items when an upload completed remotely but the desktop closed before clearing the pending queue.
+
+Browser-style file uploads still use `FormData` as a fallback. The native Tauri flow is the preferred path for large local files.
 
 ## Development
 
@@ -239,6 +249,8 @@ On Windows, Discasa uses:
 ```
 
 The desktop also keeps a per-server library cache in local storage.
+
+Pending native uploads are stored separately from the normal library cache. They are never written as authoritative library items, which prevents interrupted previews from becoming permanent ghost files.
 
 ## License and Distribution
 

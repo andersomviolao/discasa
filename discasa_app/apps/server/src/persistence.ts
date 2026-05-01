@@ -46,7 +46,16 @@ export type ActiveStorageContext = {
   configChannelName: string;
 };
 
+export type LocalSourceFile = {
+  filePath: string;
+  fileName: string;
+  mimeType: string;
+  fileSize: number;
+  modifiedAt: string;
+};
+
 export type UploadedFileRecord = {
+  itemId?: string;
   fileName: string;
   fileSize: number;
   mimeType: string;
@@ -1375,7 +1384,7 @@ function toAlbumRecord(folder: PersistedFolderNode, itemsById: Map<string, Persi
 
 function createStoredLibraryItem(file: UploadedFileRecord): PersistedItem {
   return {
-    id: nanoid(12),
+    id: file.itemId ?? nanoid(12),
     name: file.fileName,
     size: file.fileSize,
     mimeType: file.mimeType || "application/octet-stream",
@@ -1675,6 +1684,40 @@ export function cacheUploadedFilesForLocalAccess(items: LibraryItem[], files: Ex
   });
 }
 
+function cacheUploadedLocalFileForItem(item: LibraryItem, file: LocalSourceFile): void {
+  const persistedItem = findPersistedItem(item.id);
+  if (!persistedItem) {
+    return;
+  }
+
+  if (database.config.localMirrorEnabled && !needsLocalMirrorPathSelection()) {
+    try {
+      ensureParentDir(getLocalMirrorFilePath(persistedItem));
+      fs.copyFileSync(file.filePath, getLocalMirrorFilePath(persistedItem));
+    } catch (error) {
+      logger.warn("[Discasa local cache] Could not mirror an uploaded local file.", error);
+    }
+  }
+
+  if (isPreviewCacheEligible(persistedItem)) {
+    try {
+      ensureParentDir(getThumbnailCacheFilePath(persistedItem));
+      fs.copyFileSync(file.filePath, getThumbnailCacheFilePath(persistedItem));
+    } catch (error) {
+      logger.warn("[Discasa local cache] Could not cache an uploaded local thumbnail.", error);
+    }
+  }
+}
+
+export function cacheUploadedLocalFilesForLocalAccess(items: LibraryItem[], files: LocalSourceFile[]): void {
+  items.forEach((item, index) => {
+    const file = files[index];
+    if (file) {
+      cacheUploadedLocalFileForItem(item, file);
+    }
+  });
+}
+
 export async function getLibraryItemContentSource(
   itemId: string,
 ): Promise<{ type: "file"; filePath: string; mimeType: string; fileName: string } | { type: "redirect"; url: string } | null> {
@@ -1793,19 +1836,33 @@ export function addMockFiles(files: Express.Multer.File[], albumId?: string): Li
 }
 
 export function addUploadedFiles(files: UploadedFileRecord[], albumId?: string): LibraryItem[] {
-  const created = files.map((file) => createStoredLibraryItem(file));
+  const existingItemIds = new Set(database.items.map((item) => item.id));
+  const created = files
+    .filter((file) => !file.itemId || !existingItemIds.has(file.itemId))
+    .map((file) => createStoredLibraryItem(file));
+  const resultIds = new Set([
+    ...created.map((item) => item.id),
+    ...files
+      .map((file) => file.itemId)
+      .filter((itemId): itemId is string => Boolean(itemId && existingItemIds.has(itemId))),
+  ]);
 
   database.items.unshift(...created);
 
   if (albumId && hasFolder(albumId)) {
-    for (const item of created) {
-      database.memberships.push(createAlbumMembership(albumId, item.id, item.uploadedAt));
+    const membershipKeys = new Set(database.memberships.map((membership) => `${membership.folderId}:${membership.itemId}`));
+    for (const itemId of resultIds) {
+      const item = database.items.find((entry) => entry.id === itemId);
+      const membershipKey = `${albumId}:${itemId}`;
+      if (item && !membershipKeys.has(membershipKey)) {
+        database.memberships.push(createAlbumMembership(albumId, item.id, item.uploadedAt));
+        membershipKeys.add(membershipKey);
+      }
     }
   }
 
   saveDatabase();
-  const createdIds = new Set(created.map((item) => item.id));
-  return getHydratedLibraryItems().filter((item) => createdIds.has(item.id));
+  return getHydratedLibraryItems().filter((item) => resultIds.has(item.id));
 }
 
 export function addLibraryItemsToAlbum(albumId: string, itemIds: string[]): LibraryItem[] | null {

@@ -59,6 +59,7 @@ Responsibilities:
 - local persistence;
 - library, file, and thumbnail cache;
 - optional local mirroring;
+- native local-path uploads and resilient pending-upload previews;
 - large-file chunking;
 - storage manifests;
 - snapshot synchronization;
@@ -105,6 +106,7 @@ Responsibilities kept out of the bot and owned by the app:
 - move files to trash;
 - restore files;
 - permanently delete library items;
+- preserve pending upload choices while files are still being processed;
 - list eligible servers with the user's OAuth token.
 
 This design keeps the bot lightweight for online hosting and high-concurrency scenarios.
@@ -250,7 +252,7 @@ Contains preferences persisted in Discord:
 - local mirror configuration;
 - interface language.
 
-## 7. Login and Installation Flow
+## 7. Login, Installation, and Modal Flow
 
 1. User starts Discord login.
 2. Browser opens the OAuth flow.
@@ -268,18 +270,52 @@ Contains preferences persisted in Discord:
 
 During the longer apply/sync step, the interface shows a dynamic loading screen so the user can see that work is still in progress.
 
+The setup flow uses the Discord blue accent by default (`#5865F2`) so first-run authentication does not inherit the app's previous orange brand accent. The same modal layering is used across setup, settings, album actions, delete confirmations, and the media viewer:
+
+- the interface behind the modal is darkened and blurred;
+- buttons keep consistent minimum sizing;
+- the titlebar remains above overlays so the window can still be dragged while a modal or login/setup flow is open.
+
 ## 8. Upload Flow
 
-1. User drags files into the interface.
-2. Desktop sends files to the local backend.
-3. Backend checks the active storage context.
-4. For each file:
+1. User selects files with the upload button or drags files into the interface.
+2. In the Tauri desktop runtime, native files are sent to the backend by local path through `/api/upload-local`.
+3. Browser fallback uploads still use `FormData` through `/api/upload`.
+4. Desktop creates temporary pending library items immediately.
+5. The user can favorite, move to a folder, remove from a folder, or move pending items to trash before the backend finishes.
+6. Backend checks the active storage context.
+7. For each file:
    - if `<= 10 MiB`, send once;
    - if `> 10 MiB`, split into chunks.
-5. Bot performs targeted Discord uploads.
-6. App creates library records.
-7. App updates snapshots.
-8. App updates local cache and thumbnails when applicable.
+8. Bot performs targeted Discord uploads.
+9. App creates or reconciles library records.
+10. App applies any choices made while the item was pending.
+11. App updates snapshots.
+12. App updates local cache and thumbnails when applicable.
+
+### 8.1 Pending Upload Recovery
+
+Native local-path uploads use a client-generated pending id. The frontend passes that id to the backend as `clientUploadIds`, and the backend stores the final library item with the same id when possible.
+
+Pending records are stored separately from the normal per-server library cache. They contain only recovery metadata:
+
+- pending id;
+- guild id;
+- source local path;
+- display name;
+- MIME type and size when known;
+- selected album ids;
+- favorite and trash state;
+- timestamps.
+
+This protects the user from several interruption cases:
+
+- if the connection drops before the backend completes, the pending item remains visible as interrupted and can be retried on the next startup;
+- if Discasa is closed or the machine loses power, startup restores the pending queue and retries local uploads;
+- if the backend finished but the desktop closed before clearing the queue, startup detects the existing item id and removes the stale pending record instead of uploading a duplicate;
+- pending previews are filtered out of the normal library cache so they cannot become permanent ghost files.
+
+Object URLs created for browser fallback previews are revoked when a pending upload is finalized, removed, or fails.
 
 ## 9. Automatic Import
 
@@ -361,6 +397,8 @@ The desktop keeps a per-server cache to render the library quickly at startup. T
 
 This cache improves first paint, but the authoritative state remains the remote snapshot and app local persistence.
 
+Pending native uploads are intentionally excluded from this cache. They live in the pending upload queue until the backend finalizes them or the app removes the stale queue record.
+
 ## 14. Runtime Language Switching
 
 The desktop supports English and Portuguese. Language is stored in `DiscasaConfig.language`, so it can sync through the same config snapshot as the rest of the app settings.
@@ -395,6 +433,7 @@ Main areas:
 - library;
 - albums/folders;
 - upload;
+- local-path upload through `/api/upload-local`;
 - content and thumbnails;
 - settings/config;
 - automatic external import.

@@ -71,6 +71,7 @@ import {
   toggleFavorite,
   updateAppConfig,
   uploadFiles,
+  uploadLocalFilePaths,
   chooseLocalMirrorFolder,
   downloadLibraryItems,
   DEFAULT_PROFILE,
@@ -129,6 +130,65 @@ import {
   Titlebar,
 } from "./components/app-components";
 
+const PENDING_UPLOAD_ID_PREFIX = "pending-upload:";
+
+type PendingUploadItem = LibraryItem & {
+  uploadState: "processing";
+  uploadSourcePath?: string;
+  uploadPreviewObjectUrl?: string;
+};
+
+type PendingUploadRecord = {
+  id: string;
+  guildId: string;
+  filePath: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  albumIds: string[];
+  isFavorite: boolean;
+  isTrashed: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+function isPendingUploadItem(item: LibraryItem): item is PendingUploadItem {
+  return item.id.startsWith(PENDING_UPLOAD_ID_PREFIX);
+}
+
+function getFileNameFromPath(filePath: string): string {
+  return filePath.split(/[\\/]/).filter(Boolean).pop() ?? filePath;
+}
+
+function inferMimeTypeFromName(fileName: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const knownTypes: Record<string, string> = {
+    avif: "image/avif",
+    bmp: "image/bmp",
+    gif: "image/gif",
+    jpeg: "image/jpeg",
+    jpg: "image/jpeg",
+    png: "image/png",
+    webp: "image/webp",
+    mp4: "video/mp4",
+    mov: "video/quicktime",
+    m4v: "video/mp4",
+    webm: "video/webm",
+    mp3: "audio/mpeg",
+    m4a: "audio/mp4",
+    ogg: "audio/ogg",
+    wav: "audio/wav",
+    pdf: "application/pdf",
+    txt: "text/plain",
+  };
+
+  return knownTypes[extension] ?? "application/octet-stream";
+}
+
+function canUseInstantPreview(mimeType: string): boolean {
+  return mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/");
+}
+
 const appWindow = getCurrentWindow();
 const SIDEBAR_COLLAPSED_KEY = "discasa.sidebar.collapsed";
 const MINIMIZE_TO_TRAY_KEY = "discasa.window.minimizeToTray";
@@ -139,6 +199,7 @@ const ACTIVE_GUILD_ID_KEY = "discasa.discord.activeGuildId";
 const ACTIVE_GUILD_NAME_KEY = "discasa.discord.activeGuildName";
 const LIBRARY_CACHE_KEY_PREFIX = "discasa.library.cache";
 const LIBRARY_CACHE_VERSION = 1;
+const PENDING_UPLOAD_QUEUE_KEY = "discasa.upload.pendingQueue.v1";
 const THUMBNAIL_ZOOM_KEY = "discasa.library.thumbnailZoomPercent";
 const DEFAULT_ACCENT_HEX = DISCASA_DEFAULT_CONFIG.accentColor;
 const THUMBNAIL_BASE_SIZE = 400;
@@ -216,6 +277,101 @@ function isCachedLibraryItem(value: unknown): value is LibraryItem {
   );
 }
 
+function isPendingUploadRecord(value: unknown): value is PendingUploadRecord {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.guildId === "string" &&
+    typeof value.filePath === "string" &&
+    typeof value.name === "string" &&
+    typeof value.size === "number" &&
+    typeof value.mimeType === "string" &&
+    Array.isArray(value.albumIds) &&
+    typeof value.isFavorite === "boolean" &&
+    typeof value.isTrashed === "boolean" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string"
+  );
+}
+
+function readPendingUploadRecords(): PendingUploadRecord[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const raw = window.localStorage.getItem(PENDING_UPLOAD_QUEUE_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter(isPendingUploadRecord) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingUploadRecords(records: PendingUploadRecord[]): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (records.length === 0) {
+      window.localStorage.removeItem(PENDING_UPLOAD_QUEUE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(PENDING_UPLOAD_QUEUE_KEY, JSON.stringify(records));
+  } catch {
+    // The visible queue still works even when localStorage is unavailable.
+  }
+}
+
+function upsertPendingUploadRecords(nextRecords: PendingUploadRecord[]): void {
+  if (nextRecords.length === 0) {
+    return;
+  }
+
+  const recordsById = new Map(readPendingUploadRecords().map((record) => [record.id, record]));
+  for (const record of nextRecords) {
+    recordsById.set(record.id, record);
+  }
+
+  writePendingUploadRecords(Array.from(recordsById.values()));
+}
+
+function patchPendingUploadRecord(itemId: string, patch: Partial<Pick<PendingUploadRecord, "albumIds" | "isFavorite" | "isTrashed">>): void {
+  const records = readPendingUploadRecords();
+  let didChange = false;
+  const nextRecords = records.map((record) => {
+    if (record.id !== itemId) {
+      return record;
+    }
+
+    didChange = true;
+    return {
+      ...record,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  if (didChange) {
+    writePendingUploadRecords(nextRecords);
+  }
+}
+
+function removePendingUploadRecords(itemIds: string[]): void {
+  if (itemIds.length === 0) {
+    return;
+  }
+
+  const idSet = new Set(itemIds);
+  writePendingUploadRecords(readPendingUploadRecords().filter((record) => !idSet.has(record.id)));
+}
+
 function readCachedLibraryState(guildId: string): CachedLibraryState | null {
   if (!guildId || typeof window === "undefined") {
     return null;
@@ -245,7 +401,7 @@ function readCachedLibraryState(guildId: string): CachedLibraryState | null {
       sessionName: typeof parsed.sessionName === "string" ? parsed.sessionName : null,
       sessionAvatarUrl: typeof parsed.sessionAvatarUrl === "string" ? parsed.sessionAvatarUrl : null,
       albums: parsed.albums.filter(isCachedAlbumRecord),
-      items: parsed.items.filter(isCachedLibraryItem),
+      items: parsed.items.filter(isCachedLibraryItem).filter((item) => !isPendingUploadItem(item)),
       savedAt: typeof parsed.savedAt === "string" ? parsed.savedAt : "",
     };
   } catch {
@@ -261,6 +417,7 @@ function writeCachedLibraryState(input: Omit<CachedLibraryState, "version" | "sa
   try {
     const nextCache: CachedLibraryState = {
       ...input,
+      items: input.items.filter((item) => !isPendingUploadItem(item)),
       version: LIBRARY_CACHE_VERSION,
       savedAt: new Date().toISOString(),
     };
@@ -438,6 +595,7 @@ export function App() {
   const createAlbumInputRef = useRef<HTMLInputElement | null>(null);
   const renameAlbumInputRef = useRef<HTMLInputElement | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const itemsRef = useRef<LibraryItem[]>(initialCachedLibrary?.items ?? []);
   const albumsRef = useRef<AlbumRecord[]>([]);
   const selectedViewRef = useRef<SidebarView>(selectedView);
   const selectionAnchorRef = useRef<string | null>(null);
@@ -500,6 +658,10 @@ export function App() {
   useEffect(() => {
     albumsRef.current = albums;
   }, [albums]);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   useEffect(() => {
     selectedViewRef.current = selectedView;
@@ -1012,8 +1174,14 @@ export function App() {
       setSessionAvatarUrl(session.user?.avatarUrl ?? null);
       setActiveGuildId(session.activeGuild?.id ?? "");
       setActiveGuildName(session.activeGuild?.name ?? null);
+      activeGuildIdRef.current = session.activeGuild?.id ?? "";
       setAlbums(nextAlbums);
-      setItems(nextItems);
+
+      const recoverablePendingUploads = session.activeGuild
+        ? getRecoverablePendingUploadRecords(session.activeGuild.id, nextItems)
+        : [];
+      const recoveredPendingItems = recoverablePendingUploads.map(createPendingUploadItemFromRecord);
+      setItems(recoveredPendingItems.length > 0 ? [...recoveredPendingItems, ...nextItems] : nextItems);
 
       if (session.activeGuild) {
         libraryCacheGuildIdRef.current = session.activeGuild.id;
@@ -1026,6 +1194,11 @@ export function App() {
           albums: nextAlbums,
           items: nextItems,
         });
+
+        if (recoverablePendingUploads.length > 0) {
+          setMessage(`${recoverablePendingUploads.length} interrupted upload(s) recovered. Discasa is retrying them.`);
+          void resumePendingLocalUploads(recoverablePendingUploads);
+        }
       } else {
         libraryCacheGuildIdRef.current = "";
         hasHydratedLibraryCacheRef.current = false;
@@ -1261,11 +1434,36 @@ export function App() {
       return;
     }
 
-    setIsBusy(true);
     setError("");
 
+    const pendingItemIds = uniqueItemIds.filter((itemId) =>
+      itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item)),
+    );
+    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIds.includes(itemId));
+
+    if (pendingItemIds.length > 0) {
+      setItems((current) =>
+        current.map((item) => (pendingItemIds.includes(item.id) ? { ...item, albumIds: [albumId] } : item)),
+      );
+      for (const pendingItemId of pendingItemIds) {
+        patchPendingUploadRecord(pendingItemId, { albumIds: [albumId] });
+      }
+    }
+
+    if (persistedItemIds.length === 0) {
+      const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the album";
+      setMessage(`${uniqueItemIds.length} file(s) added to ${targetAlbumName}.`);
+      draggingLibraryItemIdsRef.current = [];
+      setDraggingLibraryItemIds([]);
+      setSidebarDropAlbumId(null);
+      nativeDropAlbumIdRef.current = null;
+      return;
+    }
+
+    setIsBusy(true);
+
     try {
-      const result = await addLibraryItemsToAlbum(albumId, uniqueItemIds);
+      const result = await addLibraryItemsToAlbum(albumId, persistedItemIds);
       const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
       const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the album";
 
@@ -1368,7 +1566,22 @@ export function App() {
     setRenameAlbumName("");
   }
 
-  function requestUpload(): void {
+  async function requestUpload(): Promise<void> {
+    if (isTauriRuntime()) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({
+        multiple: true,
+        directory: false,
+      });
+      const filePaths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+
+      if (filePaths.length > 0) {
+        await handleNativeFileDrop(filePaths);
+      }
+
+      return;
+    }
+
     uploadInputRef.current?.click();
   }
 
@@ -1499,19 +1712,38 @@ export function App() {
       return;
     }
 
+    const pendingTargets = targets.filter(isPendingUploadItem);
+    const persistedTargets = targets.filter((item) => !isPendingUploadItem(item));
+
+    if (pendingTargets.length > 0) {
+      setItems((current) =>
+        current.map((item) =>
+          pendingTargets.some((target) => target.id === item.id) ? { ...item, albumIds: [moveItemsTargetAlbumId] } : item,
+        ),
+      );
+      for (const pendingItem of pendingTargets) {
+        patchPendingUploadRecord(pendingItem.id, { albumIds: [moveItemsTargetAlbumId] });
+      }
+    }
+
     setIsMovingItems(true);
-    setIsBusy(true);
+    setIsBusy(persistedTargets.length > 0);
     setMoveItemsError("");
     setError("");
 
     try {
-      const result = await moveLibraryItemsToAlbum(moveItemsTargetAlbumId, targets.map((item) => item.id));
-      const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
-      const targetAlbumName = result.albums.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? "the selected folder";
+      let targetAlbumName = albumsRef.current.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? "the selected folder";
 
-      albumsRef.current = result.albums;
-      setAlbums(result.albums);
-      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      if (persistedTargets.length > 0) {
+        const result = await moveLibraryItemsToAlbum(moveItemsTargetAlbumId, persistedTargets.map((item) => item.id));
+        const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
+        targetAlbumName = result.albums.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? targetAlbumName;
+
+        albumsRef.current = result.albums;
+        setAlbums(result.albums);
+        setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      }
+
       setSelectedView({ kind: "album", id: moveItemsTargetAlbumId });
       setMessage(`${targets.length} file(s) moved to ${targetAlbumName}.`);
       setSelectedItemIds([]);
@@ -1533,11 +1765,39 @@ export function App() {
       return;
     }
 
-    setIsBusy(true);
     setError("");
 
+    const pendingItemIds = uniqueItemIds.filter((itemId) =>
+      itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item)),
+    );
+    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIds.includes(itemId));
+
+    if (pendingItemIds.length > 0) {
+      setItems((current) =>
+        current.map((item) =>
+          pendingItemIds.includes(item.id) ? { ...item, albumIds: item.albumIds.filter((id) => id !== albumId) } : item,
+        ),
+      );
+      for (const pendingItemId of pendingItemIds) {
+        const pendingItem = itemsRef.current.find((item) => item.id === pendingItemId);
+        patchPendingUploadRecord(pendingItemId, {
+          albumIds: pendingItem ? pendingItem.albumIds.filter((id) => id !== albumId) : [],
+        });
+      }
+    }
+
+    if (persistedItemIds.length === 0) {
+      const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the folder";
+      setSelectedItemIds([]);
+      selectionAnchorRef.current = null;
+      setMessage(`${uniqueItemIds.length} file(s) removed from ${targetAlbumName}.`);
+      return;
+    }
+
+    setIsBusy(true);
+
     try {
-      const result = await removeLibraryItemsFromAlbum(albumId, uniqueItemIds);
+      const result = await removeLibraryItemsFromAlbum(albumId, persistedItemIds);
       const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
       const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the folder";
 
@@ -1610,60 +1870,297 @@ export function App() {
     }
   }
 
-  async function commitUploadedFiles(files: File[], albumId?: string): Promise<void> {
-    const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
-    await uploadFiles(files, targetAlbumId);
+  function createPendingUploadItem(input: {
+    id?: string;
+    name: string;
+    size: number;
+    mimeType: string;
+    targetAlbumId?: string;
+    albumIds?: string[];
+    previewUrl?: string;
+    previewObjectUrl?: string;
+    sourcePath?: string;
+    isFavorite?: boolean;
+    isTrashed?: boolean;
+  }): PendingUploadItem {
+    const id = input.id ?? `${PENDING_UPLOAD_ID_PREFIX}${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    return {
+      id,
+      name: input.name,
+      size: input.size,
+      mimeType: input.mimeType,
+      status: "Processing upload",
+      guildId: activeGuildIdRef.current || "local",
+      albumIds: input.albumIds ?? (input.targetAlbumId ? [input.targetAlbumId] : []),
+      uploadedAt: new Date().toISOString(),
+      attachmentUrl: input.previewUrl ?? id,
+      attachmentStatus: "ready",
+      isFavorite: input.isFavorite ?? false,
+      isTrashed: input.isTrashed ?? false,
+      contentUrl: input.previewUrl,
+      thumbnailUrl: input.previewUrl,
+      uploadState: "processing",
+      uploadSourcePath: input.sourcePath,
+      uploadPreviewObjectUrl: input.previewObjectUrl,
+    };
+  }
+
+  function createPendingUploadRecord(pendingItem: PendingUploadItem, filePath: string): PendingUploadRecord {
+    return {
+      id: pendingItem.id,
+      guildId: activeGuildIdRef.current || "local",
+      filePath,
+      name: pendingItem.name,
+      size: pendingItem.size,
+      mimeType: pendingItem.mimeType,
+      albumIds: pendingItem.albumIds,
+      isFavorite: pendingItem.isFavorite,
+      isTrashed: pendingItem.isTrashed,
+      createdAt: pendingItem.uploadedAt,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function createPendingUploadItemFromRecord(record: PendingUploadRecord): PendingUploadItem {
+    const previewUrl = canUseInstantPreview(record.mimeType) ? convertFileSrc(record.filePath) : undefined;
+    return createPendingUploadItem({
+      id: record.id,
+      name: record.name,
+      size: record.size,
+      mimeType: record.mimeType,
+      albumIds: record.albumIds,
+      previewUrl,
+      sourcePath: record.filePath,
+      isFavorite: record.isFavorite,
+      isTrashed: record.isTrashed,
+    });
+  }
+
+  async function refreshLibraryAfterUpload(uploadedCount: number, targetAlbumId?: string): Promise<void> {
     const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
     const targetAlbumName = targetAlbumId ? nextAlbums.find((album) => album.id === targetAlbumId)?.name : "";
     albumsRef.current = nextAlbums;
     setItems(nextItems);
     setAlbums(nextAlbums);
     void loadLocalStorageStatus();
-    setMessage(`${files.length} file(s) added${targetAlbumName ? ` to ${targetAlbumName}` : " to the library"}.`);
+    setMessage(`${uploadedCount} file(s) added${targetAlbumName ? ` to ${targetAlbumName}` : " to the library"}.`);
     setError("");
   }
 
-  async function createFileFromNativePath(filePath: string): Promise<File> {
-    const response = await fetch(convertFileSrc(filePath));
+  function addPendingUploadItems(pendingItems: PendingUploadItem[]): void {
+    setItems((current) => [...pendingItems, ...current]);
+    setMessage(`${pendingItems.length} file(s) queued. You can organize them while Discasa finishes processing.`);
+    setError("");
+  }
 
-    if (!response.ok) {
-      throw new Error(`Failed to read dropped file: ${filePath}`);
+  function removeFailedPendingUploadItems(pendingItems: PendingUploadItem[]): void {
+    const pendingIds = new Set(pendingItems.map((item) => item.id));
+    setItems((current) => current.filter((item) => !pendingIds.has(item.id)));
+    setSelectedItemIds((current) => current.filter((itemId) => !pendingIds.has(itemId)));
+    removePendingUploadRecords(pendingItems.map((item) => item.id));
+
+    for (const pendingItem of pendingItems) {
+      if (pendingItem.uploadPreviewObjectUrl) {
+        URL.revokeObjectURL(pendingItem.uploadPreviewObjectUrl);
+      }
+    }
+  }
+
+  function markPendingUploadItemsInterrupted(pendingItems: PendingUploadItem[]): void {
+    const pendingIds = new Set(pendingItems.map((item) => item.id));
+    setItems((current) =>
+      current.map((item) => (pendingIds.has(item.id) ? { ...item, status: "Upload interrupted. Discasa will retry." } : item)),
+    );
+  }
+
+  async function syncPendingUploadChoices(realItem: LibraryItem, pendingItem: LibraryItem | undefined, targetAlbumId?: string): Promise<void> {
+    if (!pendingItem) {
+      return;
     }
 
-    const blob = await response.blob();
-    const name = filePath.split(/[\\/]/).pop() ?? "file";
-    return new File([blob], name, { type: blob.type || "application/octet-stream" });
+    const desiredAlbumId = pendingItem.albumIds[0];
+    if (desiredAlbumId && desiredAlbumId !== targetAlbumId) {
+      await moveLibraryItemsToAlbum(desiredAlbumId, [realItem.id]);
+    }
+
+    if (!desiredAlbumId && targetAlbumId) {
+      await removeLibraryItemsFromAlbum(targetAlbumId, [realItem.id]);
+    }
+
+    if (pendingItem.isFavorite) {
+      await toggleFavorite(realItem.id);
+    }
+
+    if (pendingItem.isTrashed) {
+      await moveToTrash(realItem.id);
+    }
+  }
+
+  async function finalizePendingUploadItems(
+    pendingItems: PendingUploadItem[],
+    uploadedItems: LibraryItem[],
+    targetAlbumId?: string,
+  ): Promise<void> {
+    const pendingIds = new Set(pendingItems.map((item) => item.id));
+    const latestPendingItems = new Map(
+      pendingItems.map((pendingItem) => [
+        pendingItem.id,
+        itemsRef.current.find((item) => item.id === pendingItem.id) ?? pendingItem,
+      ]),
+    );
+
+    const finalizedItems = uploadedItems.map((uploadedItem, index) => {
+      const pendingItem = latestPendingItems.get(pendingItems[index]?.id ?? "");
+      return pendingItem
+        ? {
+            ...uploadedItem,
+            albumIds: pendingItem.albumIds,
+            isFavorite: pendingItem.isFavorite,
+            isTrashed: pendingItem.isTrashed,
+          }
+        : uploadedItem;
+    });
+
+    setItems((current) => [...finalizedItems, ...current.filter((item) => !pendingIds.has(item.id))]);
+    setSelectedItemIds((current) =>
+      current
+        .map((itemId) => {
+          const pendingIndex = pendingItems.findIndex((pendingItem) => pendingItem.id === itemId);
+          return pendingIndex >= 0 ? uploadedItems[pendingIndex]?.id : itemId;
+        })
+        .filter((itemId): itemId is string => Boolean(itemId)),
+    );
+
+    for (const [index, uploadedItem] of uploadedItems.entries()) {
+      try {
+        await syncPendingUploadChoices(uploadedItem, latestPendingItems.get(pendingItems[index]?.id ?? ""), targetAlbumId);
+      } catch (caughtError) {
+        console.warn("[Discasa upload] Could not apply pending item choices after upload.", caughtError);
+      }
+    }
+
+    for (const pendingItem of pendingItems) {
+      if (pendingItem.uploadPreviewObjectUrl) {
+        URL.revokeObjectURL(pendingItem.uploadPreviewObjectUrl);
+      }
+    }
+
+    removePendingUploadRecords(pendingItems.map((item) => item.id));
+    await refreshLibraryAfterUpload(uploadedItems.length, targetAlbumId);
+  }
+
+  function getRecoverablePendingUploadRecords(guildId: string, libraryItems: LibraryItem[]): PendingUploadRecord[] {
+    if (!guildId) {
+      return [];
+    }
+
+    const libraryItemIds = new Set(libraryItems.map((item) => item.id));
+    const records = readPendingUploadRecords();
+    const staleRecordIds = records
+      .filter((record) => record.guildId === guildId && libraryItemIds.has(record.id))
+      .map((record) => record.id);
+
+    if (staleRecordIds.length > 0) {
+      removePendingUploadRecords(staleRecordIds);
+    }
+
+    return records.filter((record) => record.guildId === guildId && !libraryItemIds.has(record.id));
+  }
+
+  async function resumePendingLocalUploads(records: PendingUploadRecord[]): Promise<void> {
+    for (const record of records) {
+      const pendingItem = createPendingUploadItemFromRecord(record);
+      const targetAlbumId = record.albumIds[0];
+
+      try {
+        const result = await uploadLocalFilePaths([record.filePath], targetAlbumId, [record.id]);
+        await finalizePendingUploadItems([pendingItem], result.uploaded, targetAlbumId);
+      } catch (caughtError) {
+        markPendingUploadItemsInterrupted([pendingItem]);
+        console.warn("[Discasa upload] Pending local upload could not be resumed.", caughtError);
+      }
+    }
+  }
+
+  async function commitUploadedFiles(files: File[], albumId?: string): Promise<void> {
+    const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
+    const pendingItems = files.map((file) => {
+      const mimeType = file.type || inferMimeTypeFromName(file.name);
+      const previewObjectUrl = canUseInstantPreview(mimeType) ? URL.createObjectURL(file) : undefined;
+      return createPendingUploadItem({
+        name: file.name,
+        size: file.size,
+        mimeType,
+        targetAlbumId,
+        previewUrl: previewObjectUrl,
+        previewObjectUrl,
+      });
+    });
+
+    addPendingUploadItems(pendingItems);
+    try {
+      const result = await uploadFiles(files, targetAlbumId);
+      await finalizePendingUploadItems(pendingItems, result.uploaded, targetAlbumId);
+    } catch (caughtError) {
+      removeFailedPendingUploadItems(pendingItems);
+      throw caughtError;
+    }
+  }
+
+  async function commitUploadedLocalPaths(filePaths: string[], albumId?: string): Promise<void> {
+    const targetAlbumId = albumId ?? (selectedViewRef.current.kind === "album" ? selectedViewRef.current.id : undefined);
+    const pendingItems = filePaths.map((filePath) => {
+      const fileName = getFileNameFromPath(filePath);
+      const mimeType = inferMimeTypeFromName(fileName);
+      const previewUrl = canUseInstantPreview(mimeType) ? convertFileSrc(filePath) : undefined;
+
+      return createPendingUploadItem({
+        name: fileName,
+        size: 0,
+        mimeType,
+        targetAlbumId,
+        previewUrl,
+        sourcePath: filePath,
+      });
+    });
+
+    upsertPendingUploadRecords(pendingItems.map((pendingItem, index) => createPendingUploadRecord(pendingItem, filePaths[index] ?? "")));
+    addPendingUploadItems(pendingItems);
+    try {
+      const result = await uploadLocalFilePaths(
+        filePaths,
+        targetAlbumId,
+        pendingItems.map((item) => item.id),
+      );
+      await finalizePendingUploadItems(pendingItems, result.uploaded, targetAlbumId);
+    } catch (caughtError) {
+      markPendingUploadItemsInterrupted(pendingItems);
+      throw caughtError;
+    }
   }
 
   async function handleFiles(fileList: FileList | File[] | null, albumId?: string): Promise<void> {
     if (!fileList || fileList.length === 0) return;
 
-    setIsBusy(true);
     setError("");
 
     try {
       await commitUploadedFiles(Array.from(fileList), albumId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
-    } finally {
-      setIsBusy(false);
     }
   }
 
   async function handleNativeFileDrop(filePaths: string[], albumId?: string): Promise<void> {
     if (filePaths.length === 0) return;
 
-    setIsBusy(true);
     setError("");
 
     try {
-      const files = await Promise.all(filePaths.map((filePath) => createFileFromNativePath(filePath)));
-      await commitUploadedFiles(files, albumId);
+      await commitUploadedLocalPaths(filePaths, albumId);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to add files.");
-    } finally {
-      setIsBusy(false);
     }
   }
 
@@ -1846,6 +2343,17 @@ export function App() {
   }
 
   async function handleToggleFavorite(itemId: string): Promise<void> {
+    const pendingItem = itemsRef.current.find((item) => item.id === itemId && isPendingUploadItem(item));
+
+    if (pendingItem) {
+      const nextIsFavorite = !pendingItem.isFavorite;
+      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isFavorite: nextIsFavorite } : item)));
+      patchPendingUploadRecord(itemId, { isFavorite: nextIsFavorite });
+      setMessage(nextIsFavorite ? "File added to favorites." : "File removed from favorites.");
+      setError("");
+      return;
+    }
+
     try {
       const response = await toggleFavorite(itemId);
       updateItemInState(response.item);
@@ -1857,6 +2365,14 @@ export function App() {
   }
 
   async function handleMoveToTrash(itemId: string): Promise<void> {
+    if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
+      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: true } : item)));
+      patchPendingUploadRecord(itemId, { isTrashed: true });
+      setMessage("File moved to the trash.");
+      setError("");
+      return;
+    }
+
     try {
       const response = await moveToTrash(itemId);
       updateItemInState(response.item);
@@ -1868,6 +2384,14 @@ export function App() {
   }
 
   async function handleRestoreFromTrash(itemId: string): Promise<void> {
+    if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
+      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: false } : item)));
+      patchPendingUploadRecord(itemId, { isTrashed: false });
+      setMessage("File restored.");
+      setError("");
+      return;
+    }
+
     try {
       const response = await restoreFromTrash(itemId);
       updateItemInState(response.item);
@@ -1916,6 +2440,20 @@ export function App() {
   }
 
   function handleDeleteItem(itemId: string): Promise<void> {
+    const pendingItem = itemsRef.current.find(
+      (item): item is PendingUploadItem => item.id === itemId && isPendingUploadItem(item),
+    );
+
+    if (pendingItem) {
+      if (pendingItem.uploadPreviewObjectUrl) {
+        URL.revokeObjectURL(pendingItem.uploadPreviewObjectUrl);
+      }
+      removePendingUploadRecords([itemId]);
+      removeItemFromState(itemId);
+      setMessage("Pending upload removed from the view.");
+      return Promise.resolve();
+    }
+
     openDeleteFileModal(itemId);
     return Promise.resolve();
   }
@@ -2301,7 +2839,9 @@ export function App() {
             onSelectItem={handleSelectItem}
             onClearSelection={handleClearSelectedItems}
             onApplySelectionRect={handleApplySelectionRect}
-            onRequestUpload={requestUpload}
+            onRequestUpload={() => {
+              void requestUpload();
+            }}
             onDragEnter={handleFileDragEnter}
             onDragLeave={handleFileDragLeave}
             onDragOver={handleFileDragOver}

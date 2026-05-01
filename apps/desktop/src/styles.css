@@ -525,6 +525,7 @@ img {
   gap: var(--space-4);
   padding: var(--space-4) var(--space-5) var(--space-3);
   user-select: none;
+  touch-action: none;
 }
 
 .titlebar-drag-region {

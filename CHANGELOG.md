@@ -2,6 +2,13 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-touch-titlebar-stop-fix]
+
+### Fixed
+
+- Fixed touchscreen dragging on the custom titlebar by using pointer events and a touch/pen window-position fallback.
+- Fixed `stop-all.bat` so it also closes running Tauri app instances and related Discasa processes.
+
 ## [2026-05-01-vite-path-hotfix]
 
 ### Fixed

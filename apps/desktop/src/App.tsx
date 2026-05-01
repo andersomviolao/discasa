@@ -20,7 +20,7 @@ import {
 } from "react";
 import { createRoot } from "react-dom/client";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { getCurrentWindow, type DragDropEvent } from "@tauri-apps/api/window";
+import { getCurrentWindow, PhysicalPosition, type DragDropEvent } from "@tauri-apps/api/window";
 import {
   DISCASA_CHANNELS,
   DISCASA_DEFAULT_CONFIG,
@@ -2750,10 +2750,53 @@ export function App() {
     void persistConfigPatch({ language: nextLanguage });
   }
 
-  async function handleStartDragging(event: ReactMouseEvent<HTMLElement>): Promise<void> {
-    if (event.button !== 0) return;
+  async function handleStartDragging(event: ReactPointerEvent<HTMLElement>): Promise<void> {
+    if (!event.isPrimary || event.button !== 0) return;
 
     event.preventDefault();
+
+    if (event.pointerType !== "mouse") {
+      const startScreenX = event.screenX;
+      const startScreenY = event.screenY;
+
+      try {
+        const [startPosition, scaleFactor] = await Promise.all([appWindow.outerPosition(), appWindow.scaleFactor()]);
+        let isApplyingMove = false;
+
+        const handlePointerMove = async (moveEvent: PointerEvent) => {
+          if (moveEvent.pointerId !== event.pointerId || isApplyingMove) {
+            return;
+          }
+
+          isApplyingMove = true;
+
+          try {
+            await appWindow.setPosition(
+              new PhysicalPosition(
+                Math.round(startPosition.x + (moveEvent.screenX - startScreenX) * scaleFactor),
+                Math.round(startPosition.y + (moveEvent.screenY - startScreenY) * scaleFactor),
+              ),
+            );
+          } finally {
+            isApplyingMove = false;
+          }
+        };
+
+        const stopTouchDrag = () => {
+          window.removeEventListener("pointermove", handlePointerMove);
+          window.removeEventListener("pointerup", stopTouchDrag);
+          window.removeEventListener("pointercancel", stopTouchDrag);
+        };
+
+        window.addEventListener("pointermove", handlePointerMove);
+        window.addEventListener("pointerup", stopTouchDrag, { once: true });
+        window.addEventListener("pointercancel", stopTouchDrag, { once: true });
+      } catch {
+        return;
+      }
+
+      return;
+    }
 
     try {
       await appWindow.startDragging();

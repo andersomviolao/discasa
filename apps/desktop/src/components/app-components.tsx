@@ -4481,7 +4481,7 @@ export function StatusToast({ message, error, warning = "" }: StatusToastProps) 
 type TitlebarProps = {
   logoUrl: string;
   windowState: WindowState;
-  onDragStart: (event: ReactMouseEvent<HTMLElement>) => Promise<void>;
+  onDragStart: (event: ReactPointerEvent<HTMLElement>) => Promise<void>;
   onOpenSettings: () => void;
   onMinimize: () => Promise<void>;
   onToggleMaximize: () => Promise<void>;
@@ -4497,7 +4497,7 @@ export function Titlebar({
   onToggleMaximize,
   onClose,
 }: TitlebarProps) {
-  function handleTitlebarMouseDown(event: ReactMouseEvent<HTMLElement>) {
+  function handleTitlebarPointerDown(event: ReactPointerEvent<HTMLElement>) {
     const target = event.target as HTMLElement | null;
 
     if (target?.closest("[data-window-control='true']")) {
@@ -4508,7 +4508,7 @@ export function Titlebar({
   }
 
   return (
-    <header className="titlebar" onMouseDown={handleTitlebarMouseDown}>
+    <header className="titlebar" onPointerDown={handleTitlebarPointerDown}>
       <div className="titlebar-drag-region" aria-hidden="true">
         <div className="brand">
           <img src={logoUrl} alt="Discasa" className="brand-logo" />

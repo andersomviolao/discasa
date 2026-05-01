@@ -148,3 +148,7 @@ Legacy Tauri paths may also exist under:
 - Keep image-related scripts under `img/scripts`.
 - Keep translations in sync when interface text changes.
 - Validate desktop and server checks before pushing.
+
+## 11. License
+
+Discasa is distributed under the MIT License. See `LICENSE` for the full text.

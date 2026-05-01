@@ -2,6 +2,13 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-01-license]
+
+### Added
+
+- Added an MIT `LICENSE` file.
+- Updated README and documentation with license references.
+
 ## [2026-05-01-doc-refresh]
 
 ### Changed

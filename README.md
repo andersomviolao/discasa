@@ -89,3 +89,7 @@ See [documentation.md](documentation.md) for architecture, storage, upload, reco
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for project history.
+
+## License
+
+This repository is licensed under the MIT License. See [LICENSE](LICENSE).

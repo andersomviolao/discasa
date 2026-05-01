@@ -1,12 +1,12 @@
 # Discasa
 
-Discasa is a desktop file and media library that uses Discord as its storage and synchronization layer. The interface runs locally, the app coordinates the main product state, and the Discord bot is a small HTTP adapter for operations that require bot identity in Discord.
+Discasa is a desktop file and media library that uses Discord as its storage and synchronization layer. The interface runs locally and the app coordinates the main product state. The Discord bot now lives in its own repository, `Discasa_bot`, as a small HTTP adapter for operations that require bot identity in Discord.
 
-The project is organized into two main packages:
+The project is organized around the desktop app:
 
 - `discasa_app`: desktop app, local backend, and shared app contracts.
-- `discasa_bot`: monolithic Discord bot service, kept small for online hosting and predictable resource usage.
-- `art`: source artwork and asset-generation scripts shared by the app and bot.
+- `art`: source artwork and asset-generation scripts for the desktop app.
+- `..\Discasa_bot`: sibling repository for the hosted Discord bot service used during local full-stack development.
 
 For full architecture and flow details, see [documentation.md](documentation.md).
 
@@ -16,7 +16,6 @@ Discasa currently includes:
 
 - a Tauri 2, React 19, and Vite desktop app;
 - a local Node.js/Express backend for OAuth, local APIs, persistence, cache, and synchronization coordination;
-- a Node.js/Express Discord bot service with `discord.js`;
 - file synchronization through the `discasa-drive` channel;
 - automatic import of files manually added to `discasa-drive`;
 - optional local mirroring, with automatic import of files placed directly in the mirror folder;
@@ -35,7 +34,6 @@ Discasa currently includes:
 Discasa
   art
     app              App source artwork
-    bot              Bot source artwork
     fonts            Bundled design fonts
     scripts          Asset-generation scripts
     sources          External reference artwork
@@ -49,19 +47,11 @@ Discasa
     apps/server      Local app backend
     packages/shared  Shared app contracts
 
-  discasa_bot
-    src/index.ts     Bot service entrypoint
-    src/server.ts    HTTP routes and diagnostics
-    src/discord-service.ts  Discord storage operations
-    src/config.ts    Environment loading
-    src/logger.ts    Standardized logs
-    src/errors.ts    Standardized error responses
-
-  start-all.bat      Start the full local stack
+  start-all.bat      Start the app plus sibling ..\Discasa_bot
   stop-all.bat       Stop the full local stack
   start-app.bat      Start only the app services
   stop-app.bat       Stop only the app services
-  start-bot.bat      Start only the bot service
+  start-bot.bat      Start sibling ..\Discasa_bot
   stop-bot.bat       Stop only the bot service
 ```
 
@@ -77,7 +67,7 @@ The app owns product rules and coordination:
 - OAuth and setup flow;
 - UI language state.
 
-The bot only owns operations that require the Discord bot identity:
+The separate `Discasa_bot` repository owns operations that require the Discord bot identity:
 
 - status and installation checks in a server;
 - creating or reusing the Discasa category and channels;
@@ -134,16 +124,12 @@ From the repository root:
 ```powershell
 cd discasa_app
 npm install
-
-cd ..\discasa_bot
-npm install
 ```
 
 Copy the environment examples:
 
 ```powershell
 copy discasa_app\.env.example discasa_app\.env
-copy discasa_bot\.env.example discasa_bot\.env
 ```
 
 ### App Variables
@@ -161,19 +147,9 @@ DISCORD_BOT_URL=http://localhost:3002
 DISCORD_REDIRECT_URI=http://localhost:3001/auth/discord/callback
 ```
 
-### Bot Variables
-
-`discasa_bot\.env`:
-
-```env
-BOT_PORT=3002
-MOCK_MODE=true
-DISCORD_BOT_TOKEN=
-```
-
 ### Run
 
-Use the root launcher:
+Use the root launcher after placing the bot repository beside this repository as `..\Discasa_bot`:
 
 ```powershell
 .\start-all.bat
@@ -200,6 +176,12 @@ To run only one side of the project, use the root component launchers:
 .\stop-bot.bat
 ```
 
+The bot launcher expects the extracted bot repository at:
+
+```text
+..\Discasa_bot
+```
+
 ## Useful Scripts
 
 App:
@@ -209,14 +191,6 @@ cd discasa_app
 npm run check
 npm --workspace @discasa/desktop run build
 npm --workspace @discasa/server run build
-```
-
-Bot:
-
-```powershell
-cd discasa_bot
-npm run check
-npm run build
 ```
 
 Local reset:

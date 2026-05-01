@@ -32,8 +32,7 @@ def resolve_repo_root() -> Path:
 
     for candidate in (script_dir, *script_dir.parents):
         app_manifest = candidate / "discasa_app" / "package.json"
-        bot_manifest = candidate / "discasa_bot" / "package.json"
-        if app_manifest.exists() and bot_manifest.exists():
+        if app_manifest.exists():
             return candidate
 
     return script_dir.parents[1]

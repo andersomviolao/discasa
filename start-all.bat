@@ -4,11 +4,12 @@ setlocal EnableExtensions
 set "ROOT_DIR=%~dp0"
 if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 
-set "BOT_DIR=%ROOT_DIR%\discasa_bot"
+set "BOT_DIR=%ROOT_DIR%\..\Discasa_bot"
 set "APP_DIR=%ROOT_DIR%\discasa_app"
 
 if not exist "%BOT_DIR%\package.json" (
-  echo Discasa bot package not found: "%BOT_DIR%\package.json"
+  echo Discasa bot package not found in sibling repository: "%BOT_DIR%\package.json"
+  echo Clone or create the bot repository at "%BOT_DIR%" or start only the app with start-app.bat.
   exit /b 1
 )
 

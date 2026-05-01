@@ -1,12 +1,14 @@
 # Discasa Project Documentation
 
-This document describes the current Discasa architecture, responsibilities, main flows, storage model, local configuration, and operational notes.
+This document describes the current Discasa app architecture, responsibilities, main flows, storage model, local configuration, and operational notes. The hosted Discord bot now lives in the sibling `Discasa_bot` repository.
 
 ## 1. Goal
 
 Discasa is a desktop application for organizing files and media while using Discord as the remote storage backend. The core idea is to give the user a rich local library experience while files and snapshots are persisted in private channels inside a Discord server.
 
 Discasa must keep working even if a Discord server plan or boost level changes. For that reason, Discasa uses a fixed `10 MiB` upload limit per Discord attachment and splits larger files into chunks.
+
+The app talks to the extracted bot service through `DISCORD_BOT_URL`. In local development, that bot repository is expected beside this repository as `..\Discasa_bot`.
 
 ## 2. Components
 
@@ -17,13 +19,12 @@ Contains the project artwork sources and asset-generation scripts.
 ```text
 art
   app
-  bot
   fonts
   scripts
   sources
 ```
 
-The scripts in `art/scripts` read source artwork from the root `art` folder and write generated desktop assets back into `discasa_app`.
+The scripts in `art/scripts` read app artwork from the root `art` folder and write generated desktop assets back into `discasa_app`. Bot-specific artwork has moved to the `Discasa_bot` repository.
 
 Root launchers also live at the repository root:
 
@@ -68,21 +69,19 @@ Responsibilities:
 - bot coordination;
 - UI language selection and runtime translation.
 
-### 2.3 `discasa_bot`
+### 2.3 `Discasa_bot`
 
-Contains the Discord bot HTTP service.
+The Discord bot HTTP service is maintained as a separate public repository named `Discasa_bot`.
+
+For local full-stack development, place it beside this repository:
 
 ```text
-discasa_bot
-  src/index.ts
-  src/server.ts
-  src/discord-service.ts
-  src/config.ts
-  src/logger.ts
-  src/errors.ts
+F:\scripts
+  Discasa
+  Discasa_bot
 ```
 
-The bot stays compact for online hosting, but its code is split into a small set of operational modules: entrypoint, HTTP routes, Discord storage operations, configuration, logging, and error responses.
+The bot stays compact for online hosting. Its repository contains the service entrypoint, HTTP routes, Discord storage operations, configuration, logging, error responses, and bot-specific artwork.
 
 Current responsibilities:
 
@@ -109,7 +108,7 @@ Responsibilities kept out of the bot and owned by the app:
 - preserve pending upload choices while files are still being processed;
 - list eligible servers with the user's OAuth token.
 
-This design keeps the bot lightweight for online hosting and high-concurrency scenarios.
+This design keeps the app repository focused on the desktop product and keeps the bot lightweight for online hosting and high-concurrency scenarios.
 
 ## 3. High-Level Diagram
 
@@ -117,7 +116,7 @@ This design keeps the bot lightweight for online hosting and high-concurrency sc
 flowchart LR
   UI["Tauri + React Desktop"] --> Server["Local App Backend"]
   Server --> LocalData["AppData / LocalAppData / Cache"]
-  Server --> Bot["Monolithic Bot Service"]
+  Server --> Bot["Discasa_bot Hosted Service"]
   Server --> DiscordOAuth["Discord OAuth API"]
   Bot --> DiscordBot["Discord Bot API"]
   DiscordBot --> Channels["Discasa Channels in Server"]
@@ -499,9 +498,6 @@ Install:
 ```powershell
 cd discasa_app
 npm install
-
-cd ..\discasa_bot
-npm install
 ```
 
 Full run:
@@ -525,13 +521,12 @@ Start or stop only one component:
 .\stop-bot.bat
 ```
 
+`start-bot.bat` expects the sibling bot repository at `..\Discasa_bot`.
+
 Checks:
 
 ```powershell
 cd discasa_app
-npm run check
-
-cd ..\discasa_bot
 npm run check
 ```
 
@@ -541,9 +536,6 @@ Builds:
 cd discasa_app
 npm --workspace @discasa/desktop run build
 npm --workspace @discasa/server run build
-
-cd ..\discasa_bot
-npm run build
 ```
 
 ## 20. Local Reset
@@ -556,8 +548,8 @@ Use:
 
 It removes:
 
-- `node_modules`;
-- `package-lock.json`;
+- app `node_modules`;
+- app `package-lock.json`;
 - local builds;
 - Discasa local cache and data;
 - legacy prototype data.
@@ -567,7 +559,7 @@ It does not remove Discord channels, messages, or files.
 ## 21. Maintenance Guidelines
 
 - Keep product rules in the app.
-- Keep the hosted bot small, predictable, and monolithic.
+- Keep the hosted bot in the separate `Discasa_bot` repository.
 - Do not use a dynamic upload limit based on Discord boost level.
 - Preserve chunking for files larger than `10 MiB`.
 - Avoid making the bot process full snapshots when the app can coordinate.

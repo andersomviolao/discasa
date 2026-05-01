@@ -81,3 +81,7 @@ The reset removes generated development artifacts and local Discasa app data. It
 ## Documentation
 
 See [documentation.md](documentation.md) for architecture, storage, upload, recovery, localization, and maintenance notes.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for project history.

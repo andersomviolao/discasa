@@ -2003,6 +2003,15 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
 function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder }: GalleryFolderTileProps) {
   const childLabel = folder.childFolderCount > 0 ? `, ${folder.childFolderCount} folder${folder.childFolderCount === 1 ? "" : "s"}` : "";
 
+  function handleClick(event: ReactMouseEvent<HTMLButtonElement>): void {
+    if (event.detail >= 2) {
+      onOpenFolder(folder.id);
+      return;
+    }
+
+    onSelectFolder(folder.id);
+  }
+
   return (
     <button
       type="button"
@@ -2010,10 +2019,7 @@ function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder }:
       data-album-drop-id={folder.id}
       title={folder.name}
       aria-pressed={isSelected}
-      onPointerDown={(event) => {
-        event.preventDefault();
-      }}
-      onClick={() => onSelectFolder(folder.id)}
+      onClick={handleClick}
       onDoubleClick={() => onOpenFolder(folder.id)}
     >
       <span className="folder-tile-preview" aria-hidden="true">
@@ -2132,10 +2138,6 @@ function GalleryGrid({
   }
 
   function handleFolderDoubleClick(folderId: string): void {
-    if (isBusy) {
-      return;
-    }
-
     onOpenFolder(folderId);
   }
 

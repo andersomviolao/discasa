@@ -2,6 +2,17 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-02-developer-docs-and-folder-sizing]
+
+### Changed
+
+- Expanded `documentation.md` into a developer onboarding guide with architecture, contracts, APIs, feature maps, checklists, and troubleshooting.
+- Updated folder tile sizing so folder previews match file thumbnails in square gallery mode.
+
+### Fixed
+
+- Fixed opening nested folders by making the second click open the folder reliably.
+
 ## [2026-05-02-responsive-library-actions]
 
 ### Added

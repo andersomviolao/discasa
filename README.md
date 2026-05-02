@@ -15,6 +15,7 @@ The hosted Discord bot is maintained separately in the sibling `Discasa_bot` rep
 - Folder uploads that create albums from selected folders, plus nested folders inside albums.
 - Watched-folder imports and duplicate-file collection views.
 - Optimistic library actions so moves, removes, trash, restore, delete, favorite, and album changes appear immediately.
+- Durable background queues for Discord trash, restore, and permanent-delete storage work.
 
 ## Layout
 
@@ -86,6 +87,10 @@ npm run build:server
 ## Interface Responsiveness
 
 Discasa applies common library actions optimistically in the desktop interface and lets the backend finish persistence and Discord snapshot synchronization in the background. Failed operations roll the affected local state back and surface an error.
+
+Bulk trash, restore, and permanent-delete operations are journaled before the UI response. If the app is forced closed while Discord storage is still moving or being deleted, the backend reapplies the local intent and resumes the remote work on the next start.
+
+The gallery supports `Ctrl+A` to select all visible files. File right-click menus are custom Discasa menus, with different actions for active files, trashed files, and multi-file selections.
 
 Settings are grouped by utility, with storage first, interface controls together, account status, diagnostics, and an About tab with version and repository details.
 

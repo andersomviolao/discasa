@@ -170,10 +170,11 @@ Discasa
 
 The app treats Discord snapshots as durable remote state. The local backend persists local state first, then syncs snapshots through the bot. The bot stores the JSON it receives; it should not reinterpret product meaning.
 
-Trash movement is split into two phases:
+Trash, restore, and permanent-delete storage work is split into two phases:
 
-1. The backend marks items as trashed locally and records a pending remote operation before responding to the UI.
-2. A background worker moves the Discord attachment or chunk manifest into `discasa-trash`, updates storage pointers, clears the pending operation, and syncs the index snapshot.
+1. The backend applies the local item state and records a pending remote operation before responding to the UI.
+2. A background worker moves the Discord attachment or chunk manifest between `discasa-drive` and `discasa-trash`, or deletes the Discord storage messages for permanent delete.
+3. The worker updates storage pointers when needed, clears the pending operation, and syncs the index/folder snapshots.
 
 This keeps large batch actions fast in the UI while preserving recovery after a forced shutdown. If a stored Discord attachment URL has expired, the worker can reupload from the local mirror or thumbnail cache when a size-matched local file exists.
 
@@ -214,9 +215,11 @@ POST   /api/upload-local
 PATCH  /api/library/:itemId/favorite
 PATCH  /api/library/trash
 PATCH  /api/library/:itemId/trash
+PATCH  /api/library/restore
 PATCH  /api/library/:itemId/restore
 PATCH  /api/library/:itemId/media-edit
 DELETE /api/library/:itemId/media-edit
+DELETE /api/library
 DELETE /api/library/:itemId
 
 GET    /auth/discord/login
@@ -225,7 +228,13 @@ POST   /auth/discord/logout
 GET    /auth/discord/callback
 ```
 
-Action routes persist local state before responding. For common action routes, Discord snapshot sync is queued in the background so the UI does not wait for remote writes. Use `PATCH /api/library/trash` for bulk trash moves; it accepts `{ "itemIds": string[] }` and returns after local persistence.
+Action routes persist local state before responding. For common action routes, Discord snapshot sync is queued in the background so the UI does not wait for remote writes. Use the bulk routes for batch operations:
+
+- `PATCH /api/library/trash` accepts `{ "itemIds": string[] }` and marks items trashed locally.
+- `PATCH /api/library/restore` accepts `{ "itemIds": string[] }` and restores items locally.
+- `DELETE /api/library` accepts `{ "itemIds": string[] }` and permanently removes items locally.
+
+All three routes enqueue resumable Discord storage operations when live Discord storage is active.
 
 ## 10. Upload Flow
 
@@ -338,9 +347,35 @@ When adding a new optimistic action, capture enough previous state to roll back:
 - selected view and selected ids if navigation changes;
 - pending upload records if pending items are affected.
 
-Bulk trash has an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord movement is half-finished.
+Trash, restore, and permanent delete have an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord movement or deletion is half-finished.
 
-## 16. Media Viewer And Saved Edits
+Remote operation types:
+
+- `move-item-storage` with target `trash`: move active Discord storage to `discasa-trash`.
+- `move-item-storage` with target `drive`: restore trashed Discord storage to `discasa-drive`.
+- `delete-item-storage`: delete the stored Discord message or chunk messages after the item has already disappeared from the UI.
+
+The delete operation stores an item snapshot in the journal because the normal item record is removed immediately from the database. Keep that snapshot schema compatible with `LibraryItemIndex` if storage fields change.
+
+## 16. Gallery Selection And Context Menus
+
+The gallery owns Explorer-style file selection behavior:
+
+- single click selects one file;
+- `Shift` click selects a range;
+- `Ctrl`/`Cmd` click toggles files;
+- `Ctrl+A` selects every visible file unless a modal or text input is active;
+- right-click selects the clicked file when needed and opens a custom Discasa menu.
+
+Context menus must reflect the selected file state:
+
+- active files can open, download, favorite/unfavorite, move, be removed from the current folder, or move to trash;
+- trashed files can download, restore, or delete permanently;
+- multi-file selections hide single-file-only actions and use bulk routes.
+
+Do not rely on the browser or OS native context menu for file actions; it exposes text/image actions that do not match Discasa's storage model.
+
+## 17. Media Viewer And Saved Edits
 
 The viewer is UI-owned. Saved media edits currently support images. The persisted edit contract stores rotation and crop-state metadata on the item rather than rewriting the original Discord attachment.
 
@@ -352,7 +387,7 @@ apps/desktop/src/lib/app-logic.ts
 apps/server/src/persistence.ts
 ```
 
-## 17. Localization
+## 18. Localization
 
 Runtime language support lives in:
 
@@ -364,7 +399,7 @@ apps/desktop/src/i18n/index.ts
 
 English strings are the source text in components. Portuguese is mapped in `pt.ts`. The runtime translator observes DOM changes and translates text and selected attributes. When adding visible UI text, update Portuguese translations in the same change.
 
-## 18. Local Data And Cache
+## 19. Local Data And Cache
 
 On Windows, current data paths are:
 
@@ -382,7 +417,7 @@ Legacy Tauri paths may also exist:
 
 `hard-reset.bat` removes generated development artifacts and local Discasa app data. It does not delete Discord channels, messages, or remote files.
 
-## 19. Feature Development Guide
+## 20. Feature Development Guide
 
 Use this map to start changes:
 
@@ -416,7 +451,7 @@ Shared persistent contract
 
 Before implementing, decide whether the behavior is product logic or Discord adapter logic. Product logic stays here.
 
-## 20. Manual Test Checklist
+## 21. Manual Test Checklist
 
 Run this checklist for changes touching library behavior:
 
@@ -430,15 +465,17 @@ Run this checklist for changes touching library behavior:
 - Single-click a folder tile selects it.
 - Double-click a folder tile opens it.
 - Move files between albums and confirm exclusive membership.
+- Use `Ctrl+A` in the gallery and confirm all visible files are selected without text selection.
+- Right-click an active file, a trashed file, and a multi-file selection; confirm menus only show valid Discasa actions.
 - Favorite/unfavorite a file.
-- Move to trash and restore.
-- Permanently delete a file.
+- Move to trash and restore, including a batch selection.
+- Permanently delete a file and a batch selection from trash.
 - Enable watched folder and verify the `Watched` collection appears.
 - Verify duplicate collection appears only when duplicates exist.
 - Open Settings, change tabs, and close color picker by clicking outside.
 - Run `npm run check`.
 
-## 21. Troubleshooting
+## 22. Troubleshooting
 
 Vite cannot load `/src/main.tsx`:
 
@@ -472,7 +509,7 @@ Uploads fail:
 - Check bot upload endpoint health.
 - Check whether Discord rate limits or attachment failures are logged by the bot.
 
-## 22. Maintenance Rules
+## 23. Maintenance Rules
 
 - Keep the app responsible for user-facing behavior and state decisions.
 - Keep the bot small and suitable for online hosting.
@@ -483,6 +520,6 @@ Uploads fail:
 - Run checks before commit.
 - Update README, documentation, and changelog when behavior or structure changes.
 
-## 23. License
+## 24. License
 
 Discasa is distributed under the MIT License. See `LICENSE` for the full text.

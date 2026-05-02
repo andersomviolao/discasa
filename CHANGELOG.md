@@ -2,6 +2,26 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-02-durable-trash-restore-delete]
+
+### Added
+
+- Added bulk restore and bulk permanent-delete API routes that update local state immediately and finish Discord storage work in the background.
+- Added durable pending remote delete operations so permanent deletes resume safely after a forced shutdown.
+- Added `Ctrl+A` gallery selection for all visible files.
+- Added custom file context menus for active files, trashed files, and multi-file selections.
+
+### Changed
+
+- Restore-from-trash now uses the same resumable remote-operation journal as trash movement.
+- Permanent delete now removes files from the interface immediately and deletes Discord messages asynchronously.
+
+### Fixed
+
+- Fixed slow trash recovery and permanent-delete actions blocking the interface during large batches.
+- Fixed the disabled bulk "delete permanently" button in the trash selection action bar.
+- Fixed right-clicking files opening actions that did not match Discasa's current file state.
+
 ## [2026-05-02-durable-bulk-trash]
 
 ### Added

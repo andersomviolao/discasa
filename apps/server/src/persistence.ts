@@ -49,17 +49,28 @@ export type ActiveStorageContext = {
 
 export type PendingRemoteOperationTarget = "drive" | "trash";
 
-export type PendingRemoteOperation = {
+type PendingRemoteOperationBase = {
   id: string;
-  type: "move-item-storage";
-  itemId: string;
-  target: PendingRemoteOperationTarget;
   context: ActiveStorageContext;
   createdAt: string;
   updatedAt: string;
   attemptCount: number;
   lastError?: string;
 };
+
+export type PendingRemoteMoveOperation = PendingRemoteOperationBase & {
+  type: "move-item-storage";
+  itemId: string;
+  target: PendingRemoteOperationTarget;
+};
+
+export type PendingRemoteDeleteOperation = PendingRemoteOperationBase & {
+  type: "delete-item-storage";
+  itemId: string;
+  item: LibraryItemIndex;
+};
+
+export type PendingRemoteOperation = PendingRemoteMoveOperation | PendingRemoteDeleteOperation;
 
 export type LocalSourceFile = {
   filePath: string;
@@ -536,35 +547,60 @@ function normalizePendingRemoteOperation(raw: unknown): PendingRemoteOperation |
   const entry = raw as Record<string, unknown>;
   const context = normalizeActiveStorageContext(entry.context);
   const target = entry.target === "drive" || entry.target === "trash" ? entry.target : null;
+  const attemptCount =
+    typeof entry.attemptCount === "number" && Number.isInteger(entry.attemptCount) && entry.attemptCount >= 0
+      ? entry.attemptCount
+      : 0;
+  const base = {
+    id: typeof entry.id === "string" ? entry.id : "",
+    context,
+    createdAt: typeof entry.createdAt === "string" ? entry.createdAt : "",
+    updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
+    attemptCount,
+    lastError: typeof entry.lastError === "string" && entry.lastError.length > 0 ? entry.lastError : undefined,
+  };
 
   if (
-    typeof entry.id !== "string" ||
-    entry.id.length === 0 ||
-    entry.type !== "move-item-storage" ||
-    typeof entry.itemId !== "string" ||
-    entry.itemId.length === 0 ||
-    !target ||
+    !base.id ||
     !context ||
-    typeof entry.createdAt !== "string" ||
-    typeof entry.updatedAt !== "string"
+    !base.createdAt ||
+    !base.updatedAt ||
+    typeof entry.itemId !== "string" ||
+    entry.itemId.length === 0
   ) {
     return null;
   }
 
-  return {
-    id: entry.id,
-    type: "move-item-storage",
-    itemId: entry.itemId,
-    target,
-    context,
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
-    attemptCount:
-      typeof entry.attemptCount === "number" && Number.isInteger(entry.attemptCount) && entry.attemptCount >= 0
-        ? entry.attemptCount
-        : 0,
-    lastError: typeof entry.lastError === "string" && entry.lastError.length > 0 ? entry.lastError : undefined,
-  };
+  if (entry.type === "move-item-storage") {
+    if (!target) {
+      return null;
+    }
+
+    return {
+      ...base,
+      type: "move-item-storage",
+      itemId: entry.itemId,
+      target,
+      context,
+    };
+  }
+
+  if (entry.type === "delete-item-storage") {
+    const item = normalizeLibraryItemIndex(entry.item);
+    if (!item) {
+      return null;
+    }
+
+    return {
+      ...base,
+      type: "delete-item-storage",
+      itemId: entry.itemId,
+      item,
+      context,
+    };
+  }
+
+  return null;
 }
 
 function normalizeFolderNode(raw: unknown): PersistedFolderNode | null {
@@ -899,7 +935,10 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
   const pendingRemoteOperations = Array.isArray(raw?.pendingRemoteOperations)
     ? raw.pendingRemoteOperations
         .map((entry) => normalizePendingRemoteOperation(entry))
-        .filter((entry): entry is PendingRemoteOperation => Boolean(entry && itemIds.has(entry.itemId)))
+        .filter(
+          (entry): entry is PendingRemoteOperation =>
+            Boolean(entry && (entry.type === "delete-item-storage" || itemIds.has(entry.itemId))),
+        )
     : fallback.pendingRemoteOperations;
 
   const foldersFromSnapshot = Array.isArray(raw?.folders)
@@ -988,16 +1027,45 @@ function saveDatabase(): void {
 
 function applyPendingRemoteOperationIntent(): boolean {
   const itemsById = new Map(database.items.map((item) => [item.id, item]));
-  const latestOperationByItem = new Map<string, PendingRemoteOperation>();
+  const latestOperationByItem = new Map<string, PendingRemoteMoveOperation>();
+  const pendingDeleteItemIds = new Set(
+    database.pendingRemoteOperations
+      .filter((operation): operation is PendingRemoteDeleteOperation => operation.type === "delete-item-storage")
+      .map((operation) => operation.itemId),
+  );
   let didChange = false;
 
+  if (pendingDeleteItemIds.size > 0) {
+    database.items = database.items.filter((item) => {
+      if (!pendingDeleteItemIds.has(item.id)) {
+        return true;
+      }
+
+      removeManagedFilesForItem(item);
+      didChange = true;
+      return false;
+    });
+
+    if (didChange) {
+      database.memberships = database.memberships.filter((membership) => !pendingDeleteItemIds.has(membership.itemId));
+    }
+  }
+
   database.pendingRemoteOperations = database.pendingRemoteOperations.filter((operation) => {
-    const hasItem = itemsById.has(operation.itemId);
+    if (operation.type === "delete-item-storage") {
+      return true;
+    }
+
+    const hasItem = !pendingDeleteItemIds.has(operation.itemId) && itemsById.has(operation.itemId);
     didChange = didChange || !hasItem;
     return hasItem;
   });
 
   for (const operation of database.pendingRemoteOperations) {
+    if (operation.type !== "move-item-storage") {
+      continue;
+    }
+
     latestOperationByItem.set(operation.itemId, operation);
   }
 
@@ -2021,7 +2089,7 @@ export function enqueuePendingMoveItemStorageOperations(
     }
 
     const existing = database.pendingRemoteOperations.find(
-      (operation) => operation.type === "move-item-storage" && operation.itemId === itemId,
+      (operation): operation is PendingRemoteMoveOperation => operation.type === "move-item-storage" && operation.itemId === itemId,
     );
 
     if (existing) {
@@ -2034,7 +2102,7 @@ export function enqueuePendingMoveItemStorageOperations(
       continue;
     }
 
-    const operation: PendingRemoteOperation = {
+    const operation: PendingRemoteMoveOperation = {
       id: nanoid(12),
       type: "move-item-storage",
       itemId,
@@ -2051,6 +2119,57 @@ export function enqueuePendingMoveItemStorageOperations(
 
   if (operations.length > 0) {
     applyPendingRemoteOperationIntent();
+    saveDatabase();
+  }
+
+  return operations;
+}
+
+export function enqueuePendingDeleteItemStorageOperations(itemIds: string[], context: ActiveStorageContext): PendingRemoteOperation[] {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  const timestamp = new Date().toISOString();
+  const operations: PendingRemoteOperation[] = [];
+
+  for (const itemId of uniqueItemIds) {
+    const item = database.items.find((entry) => entry.id === itemId);
+    if (!item) {
+      continue;
+    }
+
+    database.pendingRemoteOperations = database.pendingRemoteOperations.filter(
+      (operation) => operation.type !== "move-item-storage" || operation.itemId !== itemId,
+    );
+
+    const existing = database.pendingRemoteOperations.find(
+      (operation) => operation.type === "delete-item-storage" && operation.itemId === itemId,
+    );
+
+    if (existing && existing.type === "delete-item-storage") {
+      existing.item = { ...item };
+      existing.context = { ...context };
+      existing.updatedAt = timestamp;
+      existing.attemptCount = 0;
+      existing.lastError = undefined;
+      operations.push({ ...existing, context: { ...existing.context }, item: { ...existing.item } });
+      continue;
+    }
+
+    const operation: PendingRemoteDeleteOperation = {
+      id: nanoid(12),
+      type: "delete-item-storage",
+      itemId,
+      item: { ...item },
+      context: { ...context },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      attemptCount: 0,
+    };
+
+    database.pendingRemoteOperations.push(operation);
+    operations.push({ ...operation, context: { ...operation.context }, item: { ...operation.item } });
+  }
+
+  if (operations.length > 0) {
     saveDatabase();
   }
 
@@ -2517,25 +2636,65 @@ export function trashLibraryItems(itemIds: string[]): LibraryItem[] {
 }
 
 export function restoreLibraryItem(itemId: string): LibraryItem | null {
-  const item = database.items.find((entry) => entry.id === itemId);
-  if (!item) {
-    return null;
+  return restoreLibraryItems([itemId])[0] ?? null;
+}
+
+export function restoreLibraryItems(itemIds: string[]): LibraryItem[] {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  if (!uniqueItemIds.length) {
+    return [];
   }
 
-  item.isTrashed = false;
-  saveDatabase();
-  return getLibraryItem(itemId);
+  const itemIdSet = new Set(uniqueItemIds);
+  let didChange = false;
+
+  for (const item of database.items) {
+    if (!itemIdSet.has(item.id)) {
+      continue;
+    }
+
+    if (item.isTrashed) {
+      item.isTrashed = false;
+      didChange = true;
+    }
+  }
+
+  if (didChange) {
+    saveDatabase();
+  }
+
+  return getHydratedLibraryItems().filter((item) => itemIdSet.has(item.id));
 }
 
 export function deleteLibraryItem(itemId: string): boolean {
-  const index = database.items.findIndex((entry) => entry.id === itemId);
-  if (index === -1) {
-    return false;
+  return deleteLibraryItems([itemId]).length > 0;
+}
+
+export function deleteLibraryItems(itemIds: string[]): string[] {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  if (!uniqueItemIds.length) {
+    return [];
   }
 
-  removeManagedFilesForItem(database.items[index]);
-  database.items.splice(index, 1);
-  database.memberships = database.memberships.filter((membership) => membership.itemId !== itemId);
+  const itemIdSet = new Set(uniqueItemIds);
+  const deletedIds: string[] = [];
+
+  database.items = database.items.filter((item) => {
+    if (!itemIdSet.has(item.id)) {
+      return true;
+    }
+
+    removeManagedFilesForItem(item);
+    deletedIds.push(item.id);
+    return false;
+  });
+
+  if (!deletedIds.length) {
+    return [];
+  }
+
+  const deletedIdSet = new Set(deletedIds);
+  database.memberships = database.memberships.filter((membership) => !deletedIdSet.has(membership.itemId));
   saveDatabase();
-  return true;
+  return deletedIds;
 }

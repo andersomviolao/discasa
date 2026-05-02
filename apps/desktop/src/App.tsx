@@ -46,6 +46,7 @@ import {
   createAlbum,
   deleteAlbum,
   deleteLibraryItem,
+  deleteLibraryItems as deleteLibraryItemsRequest,
   getAlbums,
   getAppConfig,
   getAppDiagnostics,
@@ -65,6 +66,7 @@ import {
   removeLibraryItemsFromAlbum,
   reorderAlbums,
   restoreFromTrash,
+  restoreItemsFromTrash,
   restoreLibraryItemOriginal as restoreLibraryItemOriginalRequest,
   saveLibraryItemMediaEdit as saveLibraryItemMediaEditRequest,
   toggleFavorite,
@@ -143,6 +145,12 @@ type PendingUploadItem = LibraryItem & {
   uploadPreviewObjectUrl?: string;
 };
 
+type DeleteFileTarget = {
+  ids: string[];
+  name: string;
+  count: number;
+};
+
 type PendingUploadRecord = {
   id: string;
   guildId: string;
@@ -188,6 +196,14 @@ function inferMimeTypeFromName(fileName: string): string {
   };
 
   return knownTypes[extension] ?? "application/octet-stream";
+}
+
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
 function canUseInstantPreview(mimeType: string): boolean {
@@ -611,7 +627,7 @@ export function App() {
   const [deleteAlbumTarget, setDeleteAlbumTarget] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingAlbum, setIsDeletingAlbum] = useState(false);
   const [deleteAlbumError, setDeleteAlbumError] = useState("");
-  const [deleteFileTarget, setDeleteFileTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteFileTarget, setDeleteFileTarget] = useState<DeleteFileTarget | null>(null);
   const [isDeletingFile, setIsDeletingFile] = useState(false);
   const [deleteFileError, setDeleteFileError] = useState("");
   const [isMoveItemsOpen, setIsMoveItemsOpen] = useState(false);
@@ -1438,6 +1454,43 @@ export function App() {
     }
   }, [visibleItemIds]);
 
+  useEffect(() => {
+    const handleSelectAll = (event: globalThis.KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "a") {
+        if (
+          authSetupStep ||
+          isSettingsOpen ||
+          isCreateAlbumOpen ||
+          renameAlbumTarget ||
+          deleteAlbumTarget ||
+          deleteFileTarget ||
+          isMoveItemsOpen ||
+          isEditableKeyboardTarget(event.target) ||
+          visibleItemIds.length === 0
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        setSelectedItemIds(visibleItemIds);
+        selectionAnchorRef.current = visibleItemIds[0] ?? null;
+      }
+    };
+
+    window.addEventListener("keydown", handleSelectAll, { capture: true });
+    return () => window.removeEventListener("keydown", handleSelectAll, { capture: true });
+  }, [
+    authSetupStep,
+    deleteAlbumTarget,
+    deleteFileTarget,
+    isCreateAlbumOpen,
+    isMoveItemsOpen,
+    isSettingsOpen,
+    renameAlbumTarget,
+    visibleItemIds,
+  ]);
+
   function orderSelectionByVisibleItems(itemIds: string[]): string[] {
     const uniqueIds = new Set(itemIds);
     return visibleItemIds.filter((itemId) => uniqueIds.has(itemId));
@@ -1756,12 +1809,21 @@ export function App() {
     setDeleteAlbumError("");
   }
 
-  function openDeleteFileModal(itemId: string): void {
-    const item = items.find((entry) => entry.id === itemId);
-    if (!item) return;
+  function openDeleteFileModal(itemIds: string | string[]): void {
+    const requestedIds = Array.isArray(itemIds) ? itemIds : [itemIds];
+    const itemMap = new Map(itemsRef.current.map((entry) => [entry.id, entry]));
+    const targetItems = Array.from(new Set(requestedIds))
+      .map((itemId) => itemMap.get(itemId) ?? null)
+      .filter((item): item is LibraryItem => Boolean(item));
+
+    if (!targetItems.length) return;
 
     setDeleteFileError("");
-    setDeleteFileTarget({ id: item.id, name: item.name });
+    setDeleteFileTarget({
+      ids: targetItems.map((item) => item.id),
+      name: targetItems.length === 1 ? targetItems[0]?.name ?? "file" : `${targetItems.length} files`,
+      count: targetItems.length,
+    });
   }
 
   function closeDeleteFileModal(): void {
@@ -2772,37 +2834,63 @@ export function App() {
     await handleMoveItemsToTrash([itemId]);
   }
 
-  async function handleRestoreFromTrash(itemId: string): Promise<void> {
-    if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
-      const nextItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: false } : item)));
-      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
-      patchPendingUploadRecord(itemId, { isTrashed: false });
-      setMessage("File restored.");
-      setError("");
+  async function handleRestoreItemsFromTrash(itemIds: string[]): Promise<void> {
+    const uniqueItemIds = Array.from(new Set(itemIds));
+    if (uniqueItemIds.length === 0) {
       return;
     }
 
-    const originalItem = itemsRef.current.find((item) => item.id === itemId);
-    if (!originalItem) {
+    const currentItemsById = new Map(itemsRef.current.map((item) => [item.id, item]));
+    const existingItemIds = uniqueItemIds.filter((itemId) => currentItemsById.has(itemId));
+    if (existingItemIds.length === 0) {
       return;
     }
 
-    const optimisticItem = { ...originalItem, isTrashed: false };
-    const optimisticItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? optimisticItem : item)));
+    const pendingUploadItems = existingItemIds
+      .map((itemId) => currentItemsById.get(itemId))
+      .filter((item): item is PendingUploadItem => Boolean(item && isPendingUploadItem(item)));
+    const pendingUploadState = new Map(pendingUploadItems.map((item) => [item.id, item.isTrashed]));
+    const realItemIds = existingItemIds.filter((itemId) => {
+      const item = currentItemsById.get(itemId);
+      return item && !isPendingUploadItem(item);
+    });
+    const restoringItemIdSet = new Set(existingItemIds);
+    const previousItems = itemsRef.current;
     const previousAlbums = albumsRef.current;
+
+    const optimisticItems = updateItemsState((current) =>
+      current.map((item) => (restoringItemIdSet.has(item.id) ? { ...item, isTrashed: false } : item)),
+    );
     commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
-    setMessage("File restored.");
+    for (const pendingItem of pendingUploadItems) {
+      patchPendingUploadRecord(pendingItem.id, { isTrashed: false });
+    }
+
+    setMessage(`${existingItemIds.length} file(s) restored.`);
     setError("");
 
-    try {
-      const response = await restoreFromTrash(itemId);
-      updateItemInState(response.item);
-      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, itemsRef.current));
-    } catch (caughtError) {
-      updateItemInState(originalItem);
-      commitAlbumsState(previousAlbums);
-      setError(caughtError instanceof Error ? caughtError.message : "Could not restore the file.");
+    if (realItemIds.length === 0) {
+      return;
     }
+
+    try {
+      const response =
+        realItemIds.length === 1 ? { items: [(await restoreFromTrash(realItemIds[0] ?? "")).item] } : await restoreItemsFromTrash(realItemIds);
+      const updatedItemsById = new Map(response.items.map((item) => [item.id, item]));
+      const nextItems = updateItemsState((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
+    } catch (caughtError) {
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      for (const [pendingItemId, wasTrashed] of pendingUploadState) {
+        patchPendingUploadRecord(pendingItemId, { isTrashed: wasTrashed });
+      }
+      setError(caughtError instanceof Error ? caughtError.message : "Could not restore the selected files.");
+    }
+  }
+
+  async function handleRestoreFromTrash(itemId: string): Promise<void> {
+    await handleRestoreItemsFromTrash([itemId]);
   }
 
   async function handleDownloadSelectedItems(targets: LibraryItem[]): Promise<void> {
@@ -2850,48 +2938,99 @@ export function App() {
       return Promise.resolve();
     }
 
-    openDeleteFileModal(itemId);
+    openDeleteFileModal([itemId]);
+    return Promise.resolve();
+  }
+
+  function handleDeleteItems(itemIds: string[]): Promise<void> {
+    const uniqueItemIds = Array.from(new Set(itemIds));
+    if (uniqueItemIds.length === 0) {
+      return Promise.resolve();
+    }
+
+    const currentItemsById = new Map(itemsRef.current.map((item) => [item.id, item]));
+    const pendingItems = uniqueItemIds
+      .map((itemId) => currentItemsById.get(itemId) ?? null)
+      .filter((item): item is PendingUploadItem => Boolean(item && isPendingUploadItem(item)));
+    const pendingItemIds = pendingItems.map((item) => item.id);
+
+    for (const pendingItem of pendingItems) {
+      if (pendingItem.uploadPreviewObjectUrl) {
+        URL.revokeObjectURL(pendingItem.uploadPreviewObjectUrl);
+      }
+    }
+
+    if (pendingItemIds.length > 0) {
+      removePendingUploadRecords(pendingItemIds);
+      const pendingItemIdSet = new Set(pendingItemIds);
+      const nextItems = updateItemsState((current) => current.filter((item) => !pendingItemIdSet.has(item.id)));
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
+      setSelectedItemIds((current) => current.filter((id) => !pendingItemIdSet.has(id)));
+      if (selectionAnchorRef.current && pendingItemIdSet.has(selectionAnchorRef.current)) {
+        selectionAnchorRef.current = null;
+      }
+    }
+
+    const realItemIds = uniqueItemIds.filter((itemId) => {
+      const item = currentItemsById.get(itemId);
+      return item && !isPendingUploadItem(item);
+    });
+
+    if (realItemIds.length > 0) {
+      openDeleteFileModal(realItemIds);
+    } else if (pendingItemIds.length > 0) {
+      setMessage(`${pendingItemIds.length} pending upload(s) removed from the view.`);
+      setError("");
+    }
+
     return Promise.resolve();
   }
 
   async function handleDeleteFileConfirm(): Promise<void> {
     if (!deleteFileTarget) return;
 
-    const originalItem = itemsRef.current.find((item) => item.id === deleteFileTarget.id);
-    if (!originalItem) {
+    const targetIdSet = new Set(deleteFileTarget.ids);
+    const targetItems = itemsRef.current.filter((item) => targetIdSet.has(item.id));
+    if (!targetItems.length) {
       setDeleteFileTarget(null);
       return;
     }
 
-    const originalIndex = itemsRef.current.findIndex((item) => item.id === deleteFileTarget.id);
+    const targetItemIds = targetItems.map((item) => item.id);
+    const realItemIds = targetItems.filter((item) => !isPendingUploadItem(item)).map((item) => item.id);
+    const previousItems = itemsRef.current;
     const previousAlbums = albumsRef.current;
-    const nextItems = updateItemsState((current) => current.filter((item) => item.id !== deleteFileTarget.id));
+    const previousSelectedItemIds = selectedItemIds;
+    const previousAnchorId = selectionAnchorRef.current;
+    const nextItems = updateItemsState((current) => current.filter((item) => !targetIdSet.has(item.id)));
 
     commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
-    setSelectedItemIds((current) => current.filter((id) => id !== deleteFileTarget.id));
-    if (selectionAnchorRef.current === deleteFileTarget.id) {
+    setSelectedItemIds((current) => current.filter((id) => !targetIdSet.has(id)));
+    if (selectionAnchorRef.current && targetIdSet.has(selectionAnchorRef.current)) {
       selectionAnchorRef.current = null;
     }
-    setMessage("File permanently deleted.");
+    setMessage(`${targetItemIds.length} file(s) permanently deleted.`);
     setError("");
     setDeleteFileTarget(null);
     setDeleteFileError("");
 
+    if (realItemIds.length === 0) {
+      return;
+    }
+
     try {
-      await deleteLibraryItem(deleteFileTarget.id);
+      if (realItemIds.length === 1) {
+        await deleteLibraryItem(realItemIds[0] ?? "");
+      } else {
+        await deleteLibraryItemsRequest(realItemIds);
+      }
       void loadLocalStorageStatus();
     } catch (caughtError) {
-      const nextError = caughtError instanceof Error ? caughtError.message : "Could not delete the file.";
-      updateItemsState((current) => {
-        if (current.some((item) => item.id === originalItem.id)) {
-          return current;
-        }
-
-        const nextItemsWithOriginal = [...current];
-        nextItemsWithOriginal.splice(Math.max(0, originalIndex), 0, originalItem);
-        return nextItemsWithOriginal;
-      });
+      const nextError = caughtError instanceof Error ? caughtError.message : "Could not delete the selected files.";
+      commitItemsState(previousItems);
       commitAlbumsState(previousAlbums);
+      setSelectedItemIds(previousSelectedItemIds);
+      selectionAnchorRef.current = previousAnchorId;
       setDeleteFileError(nextError);
       setError(nextError);
     }
@@ -3385,10 +3524,12 @@ export function App() {
             onMoveToTrash={handleMoveToTrash}
             onMoveItemsToTrash={handleMoveItemsToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
+            onRestoreItemsFromTrash={handleRestoreItemsFromTrash}
             onDownloadSelected={handleDownloadSelectedItems}
             onSaveMediaEdit={handleSaveMediaEdit}
             onRestoreMediaEdit={handleRestoreMediaEditOriginal}
             onDeleteItem={handleDeleteItem}
+            onDeleteItems={handleDeleteItems}
           />
         </div>
       </div>

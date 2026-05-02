@@ -27,8 +27,9 @@ import {
   createFolderSnapshot,
   createIndexSnapshot,
   deleteAlbum,
-  deleteLibraryItem,
+  deleteLibraryItems,
   completePendingRemoteOperation,
+  enqueuePendingDeleteItemStorageOperations,
   enqueuePendingMoveItemStorageOperations,
   failPendingRemoteOperation,
   getActiveStorageContext,
@@ -54,6 +55,7 @@ import {
   replaceDatabaseFromIndexSnapshot,
   resetDiscasaConfig,
   restoreLibraryItem,
+  restoreLibraryItems,
   restoreLibraryItemOriginal,
   saveLibraryItemMediaEdit,
   setActiveStorageContext,
@@ -402,6 +404,16 @@ function readItemIds(rawItemIds: unknown): string[] {
 async function processPendingRemoteOperation(operation: PendingRemoteOperation): Promise<void> {
   const currentOperation = getPendingRemoteOperation(operation.id);
   if (!currentOperation) {
+    return;
+  }
+
+  if (currentOperation.type === "delete-item-storage") {
+    await deleteStoredItemFromDiscord(currentOperation.context, {
+      ...currentOperation.item,
+      albumIds: [],
+    });
+    completePendingRemoteOperation(currentOperation.id);
+    queueRemoteLibrarySync();
     return;
   }
 
@@ -1451,7 +1463,7 @@ router.patch("/library/trash", async (request, response, next) => {
       return;
     }
 
-    let activeStorage = getActiveStorageContext();
+    const activeStorage = getActiveStorageContext();
     if (!env.mockMode) {
       if (!activeStorage) {
         response.status(400).json({ error: "Apply a Discord server in Settings before using the trash." });
@@ -1484,7 +1496,7 @@ router.patch("/library/trash", async (request, response, next) => {
 router.patch("/library/:itemId/trash", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
-    let activeStorage = getActiveStorageContext();
+    const activeStorage = getActiveStorageContext();
     if (!env.mockMode && !activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before using the trash." });
       return;
@@ -1508,37 +1520,60 @@ router.patch("/library/:itemId/trash", async (request, response, next) => {
   }
 });
 
+router.patch("/library/restore", async (request, response, next) => {
+  try {
+    const itemIds = readItemIds(request.body?.itemIds);
+    if (itemIds.length === 0) {
+      response.status(400).json({ error: "itemIds must include at least one item." });
+      return;
+    }
+
+    let activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
+      return;
+    }
+
+    const items = restoreLibraryItems(itemIds);
+    if (items.length === 0) {
+      response.status(404).json({ error: "Library items not found" });
+      return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingMoveItemStorageOperations(
+        items.map((item) => item.id),
+        "drive",
+        activeStorage,
+      );
+      resumePendingRemoteOperations();
+    }
+
+    queueRemoteIndexSync();
+    response.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.patch("/library/:itemId/restore", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
-    const originalItem = getLibraryItem(itemId);
-
-    if (!originalItem) {
-      response.status(404).json({ error: "Library item not found" });
+    let activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
       return;
-    }
-
-    if (!env.mockMode) {
-      const activeStorage = getActiveStorageContext();
-      if (!activeStorage) {
-        response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
-        return;
-      }
-
-      const movedRecord = await restoreStoredItemFromTrash(activeStorage, originalItem);
-      updateLibraryItemStorage(itemId, {
-        guildId: movedRecord.guildId,
-        attachmentUrl: movedRecord.attachmentUrl,
-        storageChannelId: movedRecord.storageChannelId,
-        storageMessageId: movedRecord.storageMessageId,
-      });
     }
 
     const item = restoreLibraryItem(itemId);
-
     if (!item) {
       response.status(404).json({ error: "Library item not found" });
       return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingMoveItemStorageOperations([item.id], "drive", activeStorage);
+      resumePendingRemoteOperations();
     }
 
     queueRemoteIndexSync();
@@ -1615,6 +1650,41 @@ router.delete("/library/:itemId/media-edit", async (request, response, next) => 
   }
 });
 
+router.delete("/library", async (request, response, next) => {
+  try {
+    const itemIds = readItemIds(request.body?.itemIds);
+    if (itemIds.length === 0) {
+      response.status(400).json({ error: "itemIds must include at least one item." });
+      return;
+    }
+
+    const activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before deleting files." });
+      return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingDeleteItemStorageOperations(itemIds, activeStorage);
+    }
+
+    const deletedIds = deleteLibraryItems(itemIds);
+    if (deletedIds.length === 0) {
+      response.status(404).json({ error: "Library items not found" });
+      return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      resumePendingRemoteOperations();
+    }
+
+    queueRemoteLibrarySync();
+    response.json({ deleted: true, deletedIds });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.delete("/library/:itemId", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
@@ -1625,25 +1695,29 @@ router.delete("/library/:itemId", async (request, response, next) => {
       return;
     }
 
-    if (!env.mockMode) {
-      const activeStorage = getActiveStorageContext();
-      if (!activeStorage) {
-        response.status(400).json({ error: "Apply a Discord server in Settings before deleting files." });
-        return;
-      }
-
-      await deleteStoredItemFromDiscord(activeStorage, originalItem);
+    const activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before deleting files." });
+      return;
     }
 
-    const deleted = deleteLibraryItem(itemId);
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingDeleteItemStorageOperations([itemId], activeStorage);
+    }
 
-    if (!deleted) {
+    const deletedIds = deleteLibraryItems([itemId]);
+
+    if (deletedIds.length === 0) {
       response.status(404).json({ error: "Library item not found" });
       return;
     }
 
+    if (!env.mockMode && activeStorage) {
+      resumePendingRemoteOperations();
+    }
+
     queueRemoteLibrarySync();
-    response.json({ deleted: true });
+    response.json({ deleted: true, deletedIds });
   } catch (error) {
     next(error);
   }

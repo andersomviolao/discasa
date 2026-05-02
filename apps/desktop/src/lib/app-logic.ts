@@ -119,6 +119,13 @@ export type AlbumContextMenuState = {
   albumName: string;
 } | null;
 
+export type FileContextMenuState = {
+  x: number;
+  y: number;
+  itemIds: string[];
+  anchorItemId: string;
+} | null;
+
 export type GalleryDisplayMode = "free" | "square";
 export type MouseWheelBehavior = "zoom" | "navigate";
 
@@ -885,6 +892,13 @@ export async function restoreFromTrash(itemId: string): Promise<{ item: LibraryI
   });
 }
 
+export async function restoreItemsFromTrash(itemIds: string[]): Promise<{ items: LibraryItem[] }> {
+  return requestJson<{ items: LibraryItem[] }>("/api/library/restore", {
+    method: "PATCH",
+    body: JSON.stringify({ itemIds }),
+  });
+}
+
 export async function saveLibraryItemMediaEdit(
   itemId: string,
   input: SaveLibraryItemMediaEditInput,
@@ -901,9 +915,16 @@ export async function restoreLibraryItemOriginal(itemId: string): Promise<{ item
   });
 }
 
-export async function deleteLibraryItem(itemId: string): Promise<{ deleted: true }> {
-  return requestJson<{ deleted: true }>(`/api/library/${encodeURIComponent(itemId)}`, {
+export async function deleteLibraryItem(itemId: string): Promise<{ deleted: true; deletedIds?: string[] }> {
+  return requestJson<{ deleted: true; deletedIds?: string[] }>(`/api/library/${encodeURIComponent(itemId)}`, {
     method: "DELETE",
+  });
+}
+
+export async function deleteLibraryItems(itemIds: string[]): Promise<{ deleted: true; deletedIds: string[] }> {
+  return requestJson<{ deleted: true; deletedIds: string[] }>("/api/library", {
+    method: "DELETE",
+    body: JSON.stringify({ itemIds }),
   });
 }
 

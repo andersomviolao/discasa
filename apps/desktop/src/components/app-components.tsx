@@ -48,6 +48,7 @@ import {
   VIEWER_WHEEL_BEHAVIOR_EVENT,
   type AlbumContextMenuState,
   type AppDiagnostics,
+  type FileContextMenuState,
   type GalleryDisplayMode,
   type HsvColor,
   type MouseWheelBehavior,
@@ -452,6 +453,98 @@ export function AlbumContextMenu({
       <button type="button" className="context-menu-item danger" onClick={() => void onDelete()}>
         Delete album
       </button>
+    </div>
+  );
+}
+
+type FileContextMenuProps = {
+  menu: FileContextMenuState;
+  selectedCount: number;
+  isTrashSelection: boolean;
+  isAllSelectedFavorite: boolean;
+  canOpen: boolean;
+  canDownload: boolean;
+  canMove: boolean;
+  canRemoveFromAlbum: boolean;
+  onOpen: () => void;
+  onDownload: () => void;
+  onToggleFavorite: () => void;
+  onMove: () => void;
+  onRemoveFromAlbum: () => void;
+  onMoveToTrash: () => void;
+  onRestore: () => void;
+  onDelete: () => void;
+  onPointerDown: PointerEventHandler<HTMLDivElement>;
+};
+
+export function FileContextMenu({
+  menu,
+  selectedCount,
+  isTrashSelection,
+  isAllSelectedFavorite,
+  canOpen,
+  canDownload,
+  canMove,
+  canRemoveFromAlbum,
+  onOpen,
+  onDownload,
+  onToggleFavorite,
+  onMove,
+  onRemoveFromAlbum,
+  onMoveToTrash,
+  onRestore,
+  onDelete,
+  onPointerDown,
+}: FileContextMenuProps) {
+  if (!menu || selectedCount <= 0) return null;
+
+  const suffix = selectedCount === 1 ? "" : " selected";
+
+  return (
+    <div
+      className="context-menu"
+      style={{ left: `${menu.x}px`, top: `${menu.y}px` }}
+      onPointerDown={onPointerDown}
+    >
+      {canOpen ? (
+        <button type="button" className="context-menu-item" onClick={onOpen}>
+          Open
+        </button>
+      ) : null}
+
+      <button type="button" className="context-menu-item" onClick={onDownload} disabled={!canDownload}>
+        {selectedCount === 1 ? "Download" : "Download selected"}
+      </button>
+
+      <div className="context-menu-separator" />
+
+      {isTrashSelection ? (
+        <>
+          <button type="button" className="context-menu-item" onClick={onRestore}>
+            {selectedCount === 1 ? "Restore" : "Restore selected"}
+          </button>
+          <button type="button" className="context-menu-item danger" onClick={onDelete}>
+            {selectedCount === 1 ? "Delete permanently" : "Delete selected permanently"}
+          </button>
+        </>
+      ) : (
+        <>
+          <button type="button" className="context-menu-item" onClick={onToggleFavorite}>
+            {isAllSelectedFavorite ? `Unfavorite${suffix}` : `Favorite${suffix}`}
+          </button>
+          <button type="button" className="context-menu-item" onClick={onMove} disabled={!canMove}>
+            {selectedCount === 1 ? "Move to folder" : "Move selected to folder"}
+          </button>
+          {canRemoveFromAlbum ? (
+            <button type="button" className="context-menu-item" onClick={onRemoveFromAlbum}>
+              {selectedCount === 1 ? "Remove from this folder" : "Remove selected from this folder"}
+            </button>
+          ) : null}
+          <button type="button" className="context-menu-item danger" onClick={onMoveToTrash}>
+            {selectedCount === 1 ? "Move to trash" : "Move selected to trash"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -1126,6 +1219,7 @@ type BulkActionBarProps = {
   onRemoveFromAlbum: () => void;
   onMoveToTrash: () => void;
   onRestore: () => void;
+  onDeleteForever: () => void;
   onClearSelection: () => void;
 };
 
@@ -1142,6 +1236,7 @@ export function BulkActionBar({
   onRemoveFromAlbum,
   onMoveToTrash,
   onRestore,
+  onDeleteForever,
   onClearSelection,
 }: BulkActionBarProps) {
   if (selectedCount <= 0) {
@@ -1182,9 +1277,10 @@ export function BulkActionBar({
 
           <button
             type="button"
-            className="bulk-action-button disabled"
-            disabled
-            title="Bulk permanent delete will be enabled in the next step."
+            className="bulk-action-button danger"
+            onClick={onDeleteForever}
+            disabled={isBusy}
+            title="Delete selected permanently"
           >
             <span className="bulk-action-icon" aria-hidden="true">
               <TrashIcon />
@@ -1452,10 +1548,12 @@ type GalleryProps = {
   onMoveToTrash: (itemId: string) => Promise<void>;
   onMoveItemsToTrash: (itemIds: string[]) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
+  onRestoreItemsFromTrash: (itemIds: string[]) => Promise<void>;
   onDownloadSelected: (items: LibraryItem[]) => Promise<void>;
   onSaveMediaEdit: (itemId: string, input: SaveLibraryItemMediaEditInput) => Promise<LibraryItem>;
   onRestoreMediaEdit: (itemId: string) => Promise<LibraryItem>;
   onDeleteItem: (itemId: string) => Promise<void>;
+  onDeleteItems: (itemIds: string[]) => Promise<void>;
 };
 
 type LibraryToolbarProps = {
@@ -1525,6 +1623,7 @@ type GalleryGridProps = {
   renderItemActions: (item: LibraryItem) => ReactNode;
   onStartItemDrag: (event: DragEvent<HTMLElement>, itemId: string) => void;
   onEndItemDrag: () => void;
+  onOpenItemContextMenu: (event: ReactMouseEvent<HTMLElement>, item: LibraryItem) => void;
   onBeginInternalItemDrag: (itemIds: string[]) => void;
   onMoveInternalItemDrag: (albumId: string | null) => void;
   onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
@@ -1549,6 +1648,7 @@ type GalleryItemProps = {
   onClick: (event: ReactMouseEvent<HTMLElement>, itemId: string) => void;
   onDoubleClick: (itemId: string) => void;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, item: LibraryItem) => void;
+  onContextMenu: (event: ReactMouseEvent<HTMLElement>, item: LibraryItem) => void;
   onDragStart: (event: DragEvent<HTMLElement>, itemId: string) => void;
   onDragEnd: () => void;
   onRegisterElement: (itemId: string, element: HTMLElement | null) => void;
@@ -2045,6 +2145,7 @@ function GalleryItem({
   onClick,
   onDoubleClick,
   onPointerDown,
+  onContextMenu,
   onDragStart,
   onDragEnd,
   onRegisterElement,
@@ -2056,6 +2157,7 @@ function GalleryItem({
       title={item.name}
       draggable={false}
       onPointerDown={(event) => onPointerDown(event, item)}
+      onContextMenu={(event) => onContextMenu(event, item)}
       onClick={(event) => onClick(event, item.id)}
       onDoubleClick={() => onDoubleClick(item.id)}
       onDragStart={(event) => onDragStart(event, item.id)}
@@ -2086,6 +2188,7 @@ function GalleryGrid({
   renderItemActions,
   onStartItemDrag,
   onEndItemDrag,
+  onOpenItemContextMenu,
   onBeginInternalItemDrag,
   onMoveInternalItemDrag,
   onCompleteInternalItemDrag,
@@ -2465,6 +2568,7 @@ function GalleryGrid({
           onClick={handleItemClick}
           onDoubleClick={handleItemDoubleClick}
           onPointerDown={handleItemPointerDown}
+          onContextMenu={onOpenItemContextMenu}
           onDragStart={onStartItemDrag}
           onDragEnd={onEndItemDrag}
           onRegisterElement={setItemElement}
@@ -2546,12 +2650,15 @@ export function Gallery({
   onMoveToTrash,
   onMoveItemsToTrash,
   onRestoreFromTrash,
+  onRestoreItemsFromTrash,
   onDownloadSelected,
   onSaveMediaEdit,
   onRestoreMediaEdit,
   onDeleteItem,
+  onDeleteItems,
 }: GalleryProps) {
   const [viewerState, setViewerState] = useState<ViewerState>(null);
+  const [fileContextMenu, setFileContextMenu] = useState<FileContextMenuState>(null);
   const [viewerWheelBehavior, setViewerWheelBehavior] = useState<MouseWheelBehavior>(() => readStoredMouseWheelBehavior());
   const [viewerDraftState, setViewerDraftState] = useState<ViewerDraftState>(() => createViewerDraftStateFromItem(null));
   const [isSavingViewerEdit, setIsSavingViewerEdit] = useState(false);
@@ -2576,6 +2683,18 @@ export function Gallery({
 
   const isTrashSelection = selectedItems.length > 0 && selectedItems.every((item) => item.isTrashed);
   const allSelectedAreFavorite = selectedItems.length > 0 && selectedItems.every((item) => item.isFavorite);
+  const fileContextMenuItems = useMemo(() => {
+    if (!fileContextMenu) {
+      return [];
+    }
+
+    const contextItemIds = new Set(fileContextMenu.itemIds);
+    return displayItems.filter((item) => contextItemIds.has(item.id));
+  }, [displayItems, fileContextMenu]);
+  const isFileContextTrashSelection = fileContextMenuItems.length > 0 && fileContextMenuItems.every((item) => item.isTrashed);
+  const isFileContextFavoriteSelection = fileContextMenuItems.length > 0 && fileContextMenuItems.every((item) => item.isFavorite);
+  const canDownloadFileContextSelection =
+    fileContextMenuItems.length > 0 && fileContextMenuItems.some((item) => item.attachmentStatus !== "missing");
 
   const activeViewerIndex = useMemo(() => {
     if (!viewerState) {
@@ -2628,6 +2747,27 @@ export function Gallery({
 
     return () => window.clearTimeout(timeoutId);
   }, [viewerSaveError]);
+
+  useEffect(() => {
+    if (!fileContextMenu) {
+      return;
+    }
+
+    const handlePointerDown = () => setFileContextMenu(null);
+    const handleEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFileContextMenu(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleEscape);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [fileContextMenu]);
 
   useEffect(() => {
     if (!viewerState) {
@@ -2700,10 +2840,16 @@ export function Gallery({
     }
 
     const targets = selectedItems.filter((item) => item.isTrashed);
+    await onRestoreItemsFromTrash(targets.map((item) => item.id));
+  }
 
-    for (const item of targets) {
-      await onRestoreFromTrash(item.id);
+  async function handleBulkDeleteForever(): Promise<void> {
+    if (isBusy || selectedItems.length === 0) {
+      return;
     }
+
+    const targets = selectedItems.filter((item) => item.isTrashed);
+    await onDeleteItems(targets.map((item) => item.id));
   }
 
   async function handleBulkDownload(): Promise<void> {
@@ -2739,6 +2885,38 @@ export function Gallery({
 
   function handleCloseViewer(): void {
     setViewerState(null);
+  }
+
+  function handleFileContextMenu(event: ReactMouseEvent<HTMLElement>, item: LibraryItem): void {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const selectedIdSet = new Set(selectedItemIds);
+    const itemIds = selectedIdSet.has(item.id) ? selectedItemIds : [item.id];
+    if (!selectedIdSet.has(item.id)) {
+      onSelectItem(item.id, { range: false, toggle: false });
+    }
+
+    setFileContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      itemIds,
+      anchorItemId: item.id,
+    });
+  }
+
+  function closeFileContextMenu(): void {
+    setFileContextMenu(null);
+  }
+
+  function withFileContextMenuClosed(action: () => void): void {
+    closeFileContextMenu();
+    action();
+  }
+
+  function withAsyncFileContextMenuClosed(action: () => Promise<void>): void {
+    closeFileContextMenu();
+    void action();
   }
 
   function handleNavigateViewer(direction: "previous" | "next"): void {
@@ -2881,6 +3059,9 @@ export function Gallery({
         onRestore={() => {
           void handleBulkRestore();
         }}
+        onDeleteForever={() => {
+          void handleBulkDeleteForever();
+        }}
         onClearSelection={onClearSelection}
       />
     ) : null;
@@ -2940,6 +3121,7 @@ export function Gallery({
         onApplySelectionRect={onApplySelectionRect}
         onStartItemDrag={onStartItemDrag}
         onEndItemDrag={onEndItemDrag}
+        onOpenItemContextMenu={handleFileContextMenu}
         onBeginInternalItemDrag={onBeginInternalItemDrag}
         onMoveInternalItemDrag={onMoveInternalItemDrag}
         onCompleteInternalItemDrag={onCompleteInternalItemDrag}
@@ -2947,6 +3129,62 @@ export function Gallery({
         onRequestUpload={onRequestUpload}
         onRequestFolderUpload={onRequestFolderUpload}
         renderItemActions={renderThumbnailActions}
+      />
+
+      <FileContextMenu
+        menu={fileContextMenu}
+        selectedCount={fileContextMenuItems.length}
+        isTrashSelection={isFileContextTrashSelection}
+        isAllSelectedFavorite={isFileContextFavoriteSelection}
+        canOpen={fileContextMenuItems.length === 1 && !isFileContextTrashSelection}
+        canDownload={canDownloadFileContextSelection}
+        canMove={canMoveSelectedItems}
+        canRemoveFromAlbum={currentAlbumId ? fileContextMenuItems.some((item) => item.albumIds.includes(currentAlbumId)) : false}
+        onOpen={() => {
+          const firstItem = fileContextMenuItems[0];
+          if (firstItem) {
+            withFileContextMenuClosed(() => handleOpenViewer(firstItem.id));
+          }
+        }}
+        onDownload={() => {
+          withAsyncFileContextMenuClosed(() => onDownloadSelected(fileContextMenuItems));
+        }}
+        onToggleFavorite={() => {
+          withAsyncFileContextMenuClosed(async () => {
+            const nextFavoriteState = !isFileContextFavoriteSelection;
+            const targets = fileContextMenuItems.filter((item) => item.isFavorite !== nextFavoriteState);
+            for (const item of targets) {
+              await onToggleFavorite(item.id);
+            }
+          });
+        }}
+        onMove={() => {
+          withFileContextMenuClosed(onOpenMoveItemsModal);
+        }}
+        onRemoveFromAlbum={() => {
+          if (!currentAlbumId) {
+            return;
+          }
+
+          withAsyncFileContextMenuClosed(() =>
+            onRemoveItemsFromAlbum(
+              currentAlbumId,
+              fileContextMenuItems.filter((item) => item.albumIds.includes(currentAlbumId)).map((item) => item.id),
+            ),
+          );
+        }}
+        onMoveToTrash={() => {
+          withAsyncFileContextMenuClosed(() => onMoveItemsToTrash(fileContextMenuItems.map((item) => item.id)));
+        }}
+        onRestore={() => {
+          withAsyncFileContextMenuClosed(() =>
+            onRestoreItemsFromTrash(fileContextMenuItems.filter((item) => item.isTrashed).map((item) => item.id)),
+          );
+        }}
+        onDelete={() => {
+          withAsyncFileContextMenuClosed(() => onDeleteItems(fileContextMenuItems.map((item) => item.id)));
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
       />
 
       {isDraggingFiles ? (

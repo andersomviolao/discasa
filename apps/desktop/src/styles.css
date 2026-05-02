@@ -1070,6 +1070,11 @@ img {
   gap: var(--size-6);
 }
 
+.settings-modal-nav-group + .settings-modal-nav-group {
+  padding-top: var(--size-8);
+  border-top: var(--size-1) solid var(--white-alpha-06);
+}
+
 .settings-modal-nav-label {
   padding: 0 var(--size-10) var(--size-6);
   font-size: var(--font-size-body);
@@ -2347,11 +2352,18 @@ img {
   gap: var(--size-14);
   align-content: start;
   padding-right: var(--size-2);
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .files-grid.selecting {
   cursor: crosshair;
   user-select: none;
+  -webkit-user-select: none;
+}
+
+.files-grid ::selection {
+  background: transparent;
 }
 
 .selection-box {
@@ -2382,6 +2394,8 @@ img {
   contain-intrinsic-size: var(--file-card-width) var(--size-280);
   cursor: default;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
   opacity: 1;
   transform: translateY(0);
   filter: none;
@@ -2397,8 +2411,10 @@ img {
   flex-direction: column;
   gap: var(--size-8);
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
   text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .folder-tile-preview {
@@ -2412,8 +2428,7 @@ img {
   transition:
     border-color var(--transition-state),
     box-shadow var(--transition-state),
-    background var(--transition-state),
-    transform var(--transition-state);
+    background var(--transition-state);
 }
 
 .folder-tile-preview svg {
@@ -2426,7 +2441,12 @@ img {
   border-color: var(--accent-alpha-74);
   background: var(--white-alpha-08);
   box-shadow: 0 0 0 var(--size-1) var(--accent-alpha-16);
-  transform: translateY(-2px);
+}
+
+.folder-tile.selected .folder-tile-preview {
+  border-color: var(--accent-alpha-98);
+  background: var(--accent-alpha-14);
+  box-shadow: 0 0 0 var(--size-1) var(--accent-alpha-24);
 }
 
 .folder-tile-meta {

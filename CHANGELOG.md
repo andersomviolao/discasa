@@ -2,6 +2,24 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-02-responsive-library-actions]
+
+### Added
+
+- Added optimistic UI updates for common library actions, including move, remove, favorite, trash, restore, delete, rename, reorder, and album delete.
+- Added a grouped Settings layout and an About tab with app version, stack, and repository details.
+
+### Changed
+
+- Backend action routes now queue Discord snapshot synchronization in the background after local persistence.
+- Album folder tiles now use single-click selection and double-click open behavior.
+
+### Fixed
+
+- Fixed folder tile hover clipping by removing the hover lift.
+- Fixed native selection highlights appearing behind dragged or rectangle-selected library tiles.
+- Fixed the accent color picker so clicking outside closes it inside the settings modal.
+
 ## [2026-05-01-nested-album-folders]
 
 ### Added

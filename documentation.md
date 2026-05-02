@@ -43,9 +43,10 @@ Discasa
 - Automatic import from a user-selected watched folder.
 - Folder upload expansion into generated albums.
 - Duplicate-file grouping for the `Duplicados` collection.
+- Optimistic UI updates for common library actions while backend persistence completes.
 - Local file and thumbnail cache.
 - Runtime language switching between English and Portuguese.
-- App and bot diagnostics in Settings.
+- Grouped Settings sections, an About tab, and app/bot diagnostics.
 
 ## 4. Bot Boundary
 
@@ -103,7 +104,19 @@ The desktop periodically groups duplicate library items without scanning too agg
 
 Moving or dragging a file into an album now uses exclusive membership. The item is removed from previous album memberships and kept only in the destination album.
 
-## 10. Localization
+## 10. Interface Responsiveness
+
+The desktop applies move, remove, favorite, trash, restore, delete, rename, reorder, and album-delete changes to local state before the HTTP request resolves. The backend persists the local database first and queues Discord snapshot synchronization in the background for action routes that do not need a remote result before responding.
+
+If an optimistic action fails, the app rolls the affected items or albums back and shows the error. Folder tiles inside albums use single-click selection and double-click open behavior, matching Windows Explorer.
+
+The gallery disables native text selection on draggable tiles so drag and rectangle selection do not leave the Windows blue selection highlight behind the UI.
+
+## 11. Settings
+
+Settings are grouped by utility: library storage, interface controls, account connection, and system status. The About tab shows the app version, desktop/backend stack, and repository references for this app and the sibling bot repository.
+
+## 12. Localization
 
 Runtime translation files live in:
 
@@ -116,7 +129,7 @@ apps/desktop/src/i18n
 
 Language is stored in `DiscasaConfig.language`. Changing the setting applies immediately without restarting the app.
 
-## 11. Development
+## 13. Development
 
 Install:
 
@@ -145,7 +158,7 @@ npm run build:desktop
 npm run build:server
 ```
 
-## 12. Local Data
+## 14. Local Data
 
 On Windows, Discasa uses:
 
@@ -161,7 +174,7 @@ Legacy Tauri paths may also exist under:
 %LOCALAPPDATA%\com.andersomviolao.discasa
 ```
 
-## 13. Maintenance Guidelines
+## 15. Maintenance Guidelines
 
 - Keep the app repository responsible for user-facing behavior and state decisions.
 - Keep the bot repository small and suitable for online hosting.
@@ -170,6 +183,6 @@ Legacy Tauri paths may also exist under:
 - Keep translations in sync when interface text changes.
 - Validate desktop and server checks before pushing.
 
-## 14. License
+## 16. License
 
 Discasa is distributed under the MIT License. See `LICENSE` for the full text.

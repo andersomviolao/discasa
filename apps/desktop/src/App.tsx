@@ -565,7 +565,7 @@ export function App() {
   const [renameAlbumName, setRenameAlbumName] = useState("");
   const [isRenamingAlbum, setIsRenamingAlbum] = useState(false);
   const [renameAlbumError, setRenameAlbumError] = useState("");
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>("discord");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("storage");
   const [diagnostics, setDiagnostics] = useState<AppDiagnostics | null>(null);
   const [isLoadingDiagnostics, setIsLoadingDiagnostics] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState("");
@@ -634,7 +634,7 @@ export function App() {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
   const itemsRef = useRef<LibraryItem[]>(initialCachedLibrary?.items ?? []);
-  const albumsRef = useRef<AlbumRecord[]>([]);
+  const albumsRef = useRef<AlbumRecord[]>(initialCachedLibrary?.albums ?? []);
   const selectedViewRef = useRef<SidebarView>(selectedView);
   const selectionAnchorRef = useRef<string | null>(null);
   const draggingLibraryItemIdsRef = useRef<string[]>([]);
@@ -672,6 +672,48 @@ export function App() {
       albums: next.albums,
       items: next.items,
     });
+  }
+
+  function commitItemsState(nextItems: LibraryItem[]): void {
+    itemsRef.current = nextItems;
+    setItems(nextItems);
+  }
+
+  function updateItemsState(updater: (current: LibraryItem[]) => LibraryItem[]): LibraryItem[] {
+    const nextItems = updater(itemsRef.current);
+    commitItemsState(nextItems);
+    return nextItems;
+  }
+
+  function commitAlbumsState(nextAlbums: AlbumRecord[]): void {
+    albumsRef.current = nextAlbums;
+    setAlbums(nextAlbums);
+  }
+
+  function recalculateAlbumItemCounts(nextAlbums: AlbumRecord[], nextItems: LibraryItem[]): AlbumRecord[] {
+    const countsByAlbumId = new Map<string, number>();
+
+    for (const item of nextItems) {
+      if (item.isTrashed) {
+        continue;
+      }
+
+      for (const albumId of item.albumIds) {
+        countsByAlbumId.set(albumId, (countsByAlbumId.get(albumId) ?? 0) + 1);
+      }
+    }
+
+    return nextAlbums.map((album) => ({
+      ...album,
+      itemCount: countsByAlbumId.get(album.id) ?? 0,
+    }));
+  }
+
+  function clearLibraryDragState(): void {
+    draggingLibraryItemIdsRef.current = [];
+    setDraggingLibraryItemIds([]);
+    setSidebarDropAlbumId(null);
+    nativeDropAlbumIdRef.current = null;
   }
 
   useEffect(() => {
@@ -1149,7 +1191,7 @@ export function App() {
       await updateAppConfig(patch);
       if ("localMirrorEnabled" in patch || "localMirrorPath" in patch) {
         await loadLocalStorageStatus();
-        setItems(await getLibraryItems());
+        commitItemsState(await getLibraryItems());
       }
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not save the settings.");
@@ -1241,13 +1283,14 @@ export function App() {
       setActiveGuildId(session.activeGuild?.id ?? "");
       setActiveGuildName(session.activeGuild?.name ?? null);
       activeGuildIdRef.current = session.activeGuild?.id ?? "";
-      setAlbums(nextAlbums);
 
       const recoverablePendingUploads = session.activeGuild
         ? getRecoverablePendingUploadRecords(session.activeGuild.id, nextItems)
         : [];
       const recoveredPendingItems = recoverablePendingUploads.map(createPendingUploadItemFromRecord);
-      setItems(recoveredPendingItems.length > 0 ? [...recoveredPendingItems, ...nextItems] : nextItems);
+      const hydratedItems = recoveredPendingItems.length > 0 ? [...recoveredPendingItems, ...nextItems] : nextItems;
+      commitItemsState(hydratedItems);
+      commitAlbumsState(recalculateAlbumItemCounts(nextAlbums, hydratedItems));
 
       if (session.activeGuild) {
         libraryCacheGuildIdRef.current = session.activeGuild.id;
@@ -1507,7 +1550,7 @@ export function App() {
   }
 
   async function handleAddLibraryItemsToAlbum(albumId: string, itemIds: string[]): Promise<void> {
-    const validItemIds = new Set(items.filter((item) => !item.isTrashed).map((item) => item.id));
+    const validItemIds = new Set(itemsRef.current.filter((item) => !item.isTrashed).map((item) => item.id));
     const uniqueItemIds = Array.from(new Set(itemIds)).filter((itemId) => validItemIds.has(itemId));
 
     if (!uniqueItemIds.length) {
@@ -1516,58 +1559,61 @@ export function App() {
 
     setError("");
 
+    const previousItems = itemsRef.current;
+    const previousAlbums = albumsRef.current;
     const pendingItemIds = uniqueItemIds.filter((itemId) =>
       itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item)),
     );
-    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIds.includes(itemId));
+    const pendingItemIdSet = new Set(pendingItemIds);
+    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIdSet.has(itemId));
+    const previousPendingAlbumIds = new Map(
+      pendingItemIds.map((itemId) => [
+        itemId,
+        itemsRef.current.find((item) => item.id === itemId)?.albumIds ?? [],
+      ]),
+    );
+    const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the album";
+    const uniqueItemIdSet = new Set(uniqueItemIds);
 
-    if (pendingItemIds.length > 0) {
-      setItems((current) =>
-        current.map((item) => (pendingItemIds.includes(item.id) ? { ...item, albumIds: [albumId] } : item)),
-      );
-      for (const pendingItemId of pendingItemIds) {
-        patchPendingUploadRecord(pendingItemId, { albumIds: [albumId] });
-      }
+    const optimisticItems = updateItemsState((current) =>
+      current.map((item) => (uniqueItemIdSet.has(item.id) ? { ...item, albumIds: [albumId] } : item)),
+    );
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
+
+    for (const pendingItemId of pendingItemIds) {
+      patchPendingUploadRecord(pendingItemId, { albumIds: [albumId] });
     }
+
+    setMessage(`${uniqueItemIds.length} file(s) moved to ${targetAlbumName}.`);
+    clearLibraryDragState();
 
     if (persistedItemIds.length === 0) {
-      const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the album";
-      setMessage(`${uniqueItemIds.length} file(s) moved to ${targetAlbumName}.`);
-      draggingLibraryItemIdsRef.current = [];
-      setDraggingLibraryItemIds([]);
-      setSidebarDropAlbumId(null);
-      nativeDropAlbumIdRef.current = null;
       return;
     }
-
-    setIsBusy(true);
 
     try {
       const result = await moveLibraryItemsToAlbum(albumId, persistedItemIds);
       const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
-      const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the album";
+      const finalItems = updateItemsState((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
 
-      albumsRef.current = result.albums;
-      setAlbums(result.albums);
-      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
-      setMessage(`${uniqueItemIds.length} file(s) moved to ${targetAlbumName}.`);
+      commitAlbumsState(recalculateAlbumItemCounts(result.albums, finalItems));
     } catch (caughtError) {
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      for (const [pendingItemId, albumIds] of previousPendingAlbumIds) {
+        patchPendingUploadRecord(pendingItemId, { albumIds });
+      }
       setError(caughtError instanceof Error ? caughtError.message : "Could not move the files to the album.");
-    } finally {
-      setIsBusy(false);
-      draggingLibraryItemIdsRef.current = [];
-      setDraggingLibraryItemIds([]);
-      setSidebarDropAlbumId(null);
-      nativeDropAlbumIdRef.current = null;
     }
   }
 
   function updateItemInState(nextItem: LibraryItem): void {
-    setItems((current) => current.map((item) => (item.id === nextItem.id ? nextItem : item)));
+    updateItemsState((current) => current.map((item) => (item.id === nextItem.id ? nextItem : item)));
   }
 
   function removeItemFromState(itemId: string): void {
-    setItems((current) => current.filter((item) => item.id !== itemId));
+    const nextItems = updateItemsState((current) => current.filter((item) => item.id !== itemId));
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
     setSelectedItemIds((current) => current.filter((id) => id !== itemId));
 
     if (selectionAnchorRef.current === itemId) {
@@ -1593,7 +1639,7 @@ export function App() {
 
   function openSettingsModal(): void {
     setAlbumContextMenu(null);
-    setSettingsSection("discord");
+    setSettingsSection("storage");
     setIsSettingsOpen(true);
   }
 
@@ -1754,8 +1800,7 @@ export function App() {
     try {
       const result = await createAlbum({ name: trimmed, parentId: createAlbumParentId });
       const nextAlbums = mergeAlbumRecords(albumsRef.current, [result.album]);
-      albumsRef.current = nextAlbums;
-      setAlbums(nextAlbums);
+      commitAlbumsState(nextAlbums);
       if (!createAlbumParentId) {
         setSelectedView({ kind: "album", id: result.id });
       }
@@ -1789,22 +1834,24 @@ export function App() {
       return;
     }
 
+    const targetId = renameAlbumTarget.id;
+    const previousAlbums = albumsRef.current;
+
     setIsRenamingAlbum(true);
     setRenameAlbumError("");
+    commitAlbumsState(albumsRef.current.map((album) => (album.id === targetId ? { ...album, name: trimmed } : album)));
+    setMessage(`Album renamed to: ${trimmed}`);
+    setError("");
+    setRenameAlbumTarget(null);
+    setRenameAlbumName("");
 
     try {
-      await renameAlbum(renameAlbumTarget.id, { name: trimmed });
-      const nextAlbums = albumsRef.current.map((album) =>
-        album.id === renameAlbumTarget.id ? { ...album, name: trimmed } : album,
-      );
-      albumsRef.current = nextAlbums;
-      setAlbums(nextAlbums);
-      setMessage(`Album renamed to: ${trimmed}`);
-      setError("");
-      setRenameAlbumTarget(null);
-      setRenameAlbumName("");
+      await renameAlbum(targetId, { name: trimmed });
     } catch (caughtError) {
-      setRenameAlbumError(caughtError instanceof Error ? caughtError.message : "Could not rename the album.");
+      const nextError = caughtError instanceof Error ? caughtError.message : "Could not rename the album.";
+      commitAlbumsState(previousAlbums);
+      setRenameAlbumError(nextError);
+      setError(nextError);
     } finally {
       setIsRenamingAlbum(false);
     }
@@ -1819,112 +1866,130 @@ export function App() {
     }
 
     const selectedItemIdSet = new Set(selectedItemIds);
-    const targets = items.filter((item) => selectedItemIdSet.has(item.id) && !item.isTrashed);
+    const targets = itemsRef.current.filter((item) => selectedItemIdSet.has(item.id) && !item.isTrashed);
 
     if (!targets.length) {
       setMoveItemsError("Select at least one active file.");
       return;
     }
 
+    const targetAlbumId = moveItemsTargetAlbumId;
+    const previousItems = itemsRef.current;
+    const previousAlbums = albumsRef.current;
+    const previousView = selectedViewRef.current;
+    const previousSelectedItemIds = selectedItemIds;
     const pendingTargets = targets.filter(isPendingUploadItem);
     const persistedTargets = targets.filter((item) => !isPendingUploadItem(item));
-
-    if (pendingTargets.length > 0) {
-      setItems((current) =>
-        current.map((item) =>
-          pendingTargets.some((target) => target.id === item.id) ? { ...item, albumIds: [moveItemsTargetAlbumId] } : item,
-        ),
-      );
-      for (const pendingItem of pendingTargets) {
-        patchPendingUploadRecord(pendingItem.id, { albumIds: [moveItemsTargetAlbumId] });
-      }
-    }
+    const previousPendingAlbumIds = new Map(pendingTargets.map((item) => [item.id, item.albumIds]));
+    const targetItemIdSet = new Set(targets.map((item) => item.id));
+    const targetAlbumName = albumsRef.current.find((album) => album.id === targetAlbumId)?.name ?? "the selected folder";
 
     setIsMovingItems(true);
-    setIsBusy(persistedTargets.length > 0);
     setMoveItemsError("");
     setError("");
 
+    const optimisticItems = updateItemsState((current) =>
+      current.map((item) => (targetItemIdSet.has(item.id) ? { ...item, albumIds: [targetAlbumId] } : item)),
+    );
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
+
+    for (const pendingItem of pendingTargets) {
+      patchPendingUploadRecord(pendingItem.id, { albumIds: [targetAlbumId] });
+    }
+
+    setSelectedView({ kind: "album", id: targetAlbumId });
+    setMessage(`${targets.length} file(s) moved to ${targetAlbumName}.`);
+    setSelectedItemIds([]);
+    selectionAnchorRef.current = null;
+    setIsMoveItemsOpen(false);
+
+    if (persistedTargets.length === 0) {
+      setIsMovingItems(false);
+      return;
+    }
+
     try {
-      let targetAlbumName = albumsRef.current.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? "the selected folder";
+      const result = await moveLibraryItemsToAlbum(targetAlbumId, persistedTargets.map((item) => item.id));
+      const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
+      const finalItems = updateItemsState((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
 
-      if (persistedTargets.length > 0) {
-        const result = await moveLibraryItemsToAlbum(moveItemsTargetAlbumId, persistedTargets.map((item) => item.id));
-        const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
-        targetAlbumName = result.albums.find((album) => album.id === moveItemsTargetAlbumId)?.name ?? targetAlbumName;
-
-        albumsRef.current = result.albums;
-        setAlbums(result.albums);
-        setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
-      }
-
-      setSelectedView({ kind: "album", id: moveItemsTargetAlbumId });
-      setMessage(`${targets.length} file(s) moved to ${targetAlbumName}.`);
-      setSelectedItemIds([]);
-      selectionAnchorRef.current = null;
-      setIsMoveItemsOpen(false);
+      commitAlbumsState(recalculateAlbumItemCounts(result.albums, finalItems));
+      setError("");
     } catch (caughtError) {
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      setSelectedView(previousView);
+      setSelectedItemIds(previousSelectedItemIds);
+      selectionAnchorRef.current = previousSelectedItemIds[0] ?? null;
+      for (const [pendingItemId, albumIds] of previousPendingAlbumIds) {
+        patchPendingUploadRecord(pendingItemId, { albumIds });
+      }
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not move the selected files.";
       setMoveItemsError(nextError);
       setError(nextError);
     } finally {
       setIsMovingItems(false);
-      setIsBusy(false);
     }
   }
 
   async function handleRemoveItemsFromAlbum(albumId: string, itemIds: string[]): Promise<void> {
     const uniqueItemIds = Array.from(new Set(itemIds));
-    if (!albumId || !uniqueItemIds.length || isBusy) {
+    if (!albumId || !uniqueItemIds.length) {
       return;
     }
 
     setError("");
 
+    const previousItems = itemsRef.current;
+    const previousAlbums = albumsRef.current;
     const pendingItemIds = uniqueItemIds.filter((itemId) =>
       itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item)),
     );
-    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIds.includes(itemId));
+    const pendingItemIdSet = new Set(pendingItemIds);
+    const persistedItemIds = uniqueItemIds.filter((itemId) => !pendingItemIdSet.has(itemId));
+    const previousPendingAlbumIds = new Map(
+      pendingItemIds.map((itemId) => [
+        itemId,
+        itemsRef.current.find((item) => item.id === itemId)?.albumIds ?? [],
+      ]),
+    );
+    const uniqueItemIdSet = new Set(uniqueItemIds);
+    const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the folder";
 
-    if (pendingItemIds.length > 0) {
-      setItems((current) =>
-        current.map((item) =>
-          pendingItemIds.includes(item.id) ? { ...item, albumIds: item.albumIds.filter((id) => id !== albumId) } : item,
-        ),
-      );
-      for (const pendingItemId of pendingItemIds) {
-        const pendingItem = itemsRef.current.find((item) => item.id === pendingItemId);
-        patchPendingUploadRecord(pendingItemId, {
-          albumIds: pendingItem ? pendingItem.albumIds.filter((id) => id !== albumId) : [],
-        });
-      }
+    const optimisticItems = updateItemsState((current) =>
+      current.map((item) =>
+        uniqueItemIdSet.has(item.id) ? { ...item, albumIds: item.albumIds.filter((id) => id !== albumId) } : item,
+      ),
+    );
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
+
+    for (const pendingItemId of pendingItemIds) {
+      patchPendingUploadRecord(pendingItemId, {
+        albumIds: previousPendingAlbumIds.get(pendingItemId)?.filter((id) => id !== albumId) ?? [],
+      });
     }
+
+    setSelectedItemIds([]);
+    selectionAnchorRef.current = null;
+    setMessage(`${uniqueItemIds.length} file(s) removed from ${targetAlbumName}.`);
 
     if (persistedItemIds.length === 0) {
-      const targetAlbumName = albumsRef.current.find((album) => album.id === albumId)?.name ?? "the folder";
-      setSelectedItemIds([]);
-      selectionAnchorRef.current = null;
-      setMessage(`${uniqueItemIds.length} file(s) removed from ${targetAlbumName}.`);
       return;
     }
-
-    setIsBusy(true);
 
     try {
       const result = await removeLibraryItemsFromAlbum(albumId, persistedItemIds);
       const updatedItemsById = new Map(result.items.map((item) => [item.id, item]));
-      const targetAlbumName = result.albums.find((album) => album.id === albumId)?.name ?? "the folder";
+      const finalItems = updateItemsState((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
 
-      albumsRef.current = result.albums;
-      setAlbums(result.albums);
-      setItems((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
-      setSelectedItemIds([]);
-      selectionAnchorRef.current = null;
-      setMessage(`${uniqueItemIds.length} file(s) removed from ${targetAlbumName}.`);
+      commitAlbumsState(recalculateAlbumItemCounts(result.albums, finalItems));
     } catch (caughtError) {
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      for (const [pendingItemId, albumIds] of previousPendingAlbumIds) {
+        patchPendingUploadRecord(pendingItemId, { albumIds });
+      }
       setError(caughtError instanceof Error ? caughtError.message : "Could not remove the selected files from the folder.");
-    } finally {
-      setIsBusy(false);
     }
   }
 
@@ -1940,15 +2005,29 @@ export function App() {
     const [moved] = nextAlbums.splice(currentIndex, 1);
     nextAlbums.splice(targetIndex, 0, moved);
 
+    const previousAlbums = albumsRef.current;
+    let topLevelIndex = 0;
+    const optimisticAlbums = previousAlbums.map((album) => {
+      if (!isTopLevelAlbum(album)) {
+        return album;
+      }
+
+      const nextAlbum = nextAlbums[topLevelIndex] ?? album;
+      topLevelIndex += 1;
+      return nextAlbum;
+    });
+    const orderedIds = nextAlbums.map((album) => album.id);
+
+    commitAlbumsState(optimisticAlbums);
+    setAlbumContextMenu(null);
+    setMessage(`Album moved ${direction === "up" ? "up" : "down"}.`);
+    setError("");
+
     try {
-      const orderedIds = nextAlbums.map((album) => album.id);
       const response = await reorderAlbums(orderedIds);
-      albumsRef.current = response.albums;
-      setAlbums(response.albums);
-      setAlbumContextMenu(null);
-      setMessage(`Album moved ${direction === "up" ? "up" : "down"}.`);
-      setError("");
+      commitAlbumsState(response.albums);
     } catch (caughtError) {
+      commitAlbumsState(previousAlbums);
       setError(caughtError instanceof Error ? caughtError.message : "Could not move the album.");
     }
   }
@@ -1969,31 +2048,48 @@ export function App() {
       }
     }
 
-    setIsDeletingAlbum(true);
+    const previousItems = itemsRef.current;
+    const previousAlbums = albumsRef.current;
+    const previousView = selectedViewRef.current;
+    const previousPendingAlbumIds = new Map(
+      previousItems
+        .filter((item) => isPendingUploadItem(item) && item.albumIds.some((id) => deletedFolderIds.has(id)))
+        .map((item) => [item.id, item.albumIds]),
+    );
+    const nextAlbums = albumsRef.current.filter((album) => !deletedFolderIds.has(album.id));
+    const nextItems = updateItemsState((current) =>
+      current.map((item) => ({
+        ...item,
+        albumIds: item.albumIds.filter((id) => !deletedFolderIds.has(id)),
+      })),
+    );
+
+    for (const [pendingItemId, albumIds] of previousPendingAlbumIds) {
+      patchPendingUploadRecord(pendingItemId, {
+        albumIds: albumIds.filter((id) => !deletedFolderIds.has(id)),
+      });
+    }
+
+    commitAlbumsState(recalculateAlbumItemCounts(nextAlbums, nextItems));
+    setSelectedView((current) => (current.kind === "album" && deletedFolderIds.has(current.id) ? { kind: "library", id: "all-files" } : current));
+    setDeleteAlbumTarget(null);
+    setAlbumContextMenu(null);
+    setMessage(`Album deleted: ${albumName}`);
+    setError("");
     setDeleteAlbumError("");
 
     try {
       await deleteAlbum(albumId);
-      const nextAlbums = albumsRef.current.filter((album) => !deletedFolderIds.has(album.id));
-      albumsRef.current = nextAlbums;
-      setAlbums(nextAlbums);
-      setItems((current) =>
-        current.map((item) => ({
-          ...item,
-          albumIds: item.albumIds.filter((id) => !deletedFolderIds.has(id)),
-        })),
-      );
-      setSelectedView((current) => (current.kind === "album" && deletedFolderIds.has(current.id) ? { kind: "library", id: "all-files" } : current));
-      setDeleteAlbumTarget(null);
-      setAlbumContextMenu(null);
-      setMessage(`Album deleted: ${albumName}`);
-      setError("");
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not delete the album.";
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      setSelectedView(previousView);
+      for (const [pendingItemId, albumIds] of previousPendingAlbumIds) {
+        patchPendingUploadRecord(pendingItemId, { albumIds });
+      }
       setDeleteAlbumError(nextError);
       setError(nextError);
-    } finally {
-      setIsDeletingAlbum(false);
     }
   }
 
@@ -2067,23 +2163,24 @@ export function App() {
   async function refreshLibraryAfterUpload(uploadedCount: number, targetAlbumId?: string): Promise<void> {
     const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
     const targetAlbumName = targetAlbumId ? nextAlbums.find((album) => album.id === targetAlbumId)?.name : "";
-    albumsRef.current = nextAlbums;
-    setItems(nextItems);
-    setAlbums(nextAlbums);
+    commitItemsState(nextItems);
+    commitAlbumsState(nextAlbums);
     void loadLocalStorageStatus();
     setMessage(`${uploadedCount} file(s) added${targetAlbumName ? ` to ${targetAlbumName}` : " to the library"}.`);
     setError("");
   }
 
   function addPendingUploadItems(pendingItems: PendingUploadItem[]): void {
-    setItems((current) => [...pendingItems, ...current]);
+    const nextItems = updateItemsState((current) => [...pendingItems, ...current]);
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
     setMessage(`${pendingItems.length} file(s) queued. You can organize them while Discasa finishes processing.`);
     setError("");
   }
 
   function removeFailedPendingUploadItems(pendingItems: PendingUploadItem[]): void {
     const pendingIds = new Set(pendingItems.map((item) => item.id));
-    setItems((current) => current.filter((item) => !pendingIds.has(item.id)));
+    const nextItems = updateItemsState((current) => current.filter((item) => !pendingIds.has(item.id)));
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
     setSelectedItemIds((current) => current.filter((itemId) => !pendingIds.has(itemId)));
     removePendingUploadRecords(pendingItems.map((item) => item.id));
 
@@ -2096,7 +2193,7 @@ export function App() {
 
   function markPendingUploadItemsInterrupted(pendingItems: PendingUploadItem[]): void {
     const pendingIds = new Set(pendingItems.map((item) => item.id));
-    setItems((current) =>
+    updateItemsState((current) =>
       current.map((item) => (pendingIds.has(item.id) ? { ...item, status: "Upload interrupted. Discasa will retry." } : item)),
     );
   }
@@ -2149,7 +2246,8 @@ export function App() {
         : uploadedItem;
     });
 
-    setItems((current) => [...finalizedItems, ...current.filter((item) => !pendingIds.has(item.id))]);
+    const nextItems = updateItemsState((current) => [...finalizedItems, ...current.filter((item) => !pendingIds.has(item.id))]);
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
     setSelectedItemIds((current) =>
       current
         .map((itemId) => {
@@ -2256,8 +2354,7 @@ export function App() {
       const created = await createAlbum({ name: folderName, parentId: parentFolderId });
       const targetAlbumId = created.id;
       const nextAlbums = mergeAlbumRecords(albumsRef.current, [created.album]);
-      albumsRef.current = nextAlbums;
-      setAlbums(nextAlbums);
+      commitAlbumsState(nextAlbums);
       const pendingItems = groupFiles.map((file) => {
         const mimeType = file.type || inferMimeTypeFromName(file.name);
         const previewObjectUrl = canUseInstantPreview(mimeType) ? URL.createObjectURL(file) : undefined;
@@ -2284,9 +2381,8 @@ export function App() {
 
     if (uploadedCount > 0) {
       const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
-      albumsRef.current = nextAlbums;
-      setItems(nextItems);
-      setAlbums(nextAlbums);
+      commitItemsState(nextItems);
+      commitAlbumsState(nextAlbums);
       setMessage(`${uploadedCount} file(s) added from folder upload.`);
     }
   }
@@ -2306,8 +2402,7 @@ export function App() {
         const created = await createAlbum({ name: inspected.name || getFileNameFromPath(filePath), parentId: targetAlbumId ?? null });
         folderTargets.push({ path: inspected.path, albumId: created.id });
         const nextAlbums = mergeAlbumRecords(albumsRef.current, [created.album]);
-        albumsRef.current = nextAlbums;
-        setAlbums(nextAlbums);
+        commitAlbumsState(nextAlbums);
         continue;
       }
 
@@ -2349,8 +2444,7 @@ export function App() {
         folderTargets,
       );
       if (result.albums) {
-        albumsRef.current = result.albums;
-        setAlbums(result.albums);
+        commitAlbumsState(result.albums);
       }
 
       if (pendingItems.length > 0) {
@@ -2427,9 +2521,8 @@ export function App() {
 
       const [nextItems, nextAlbums] = await Promise.all([getLibraryItems(), getAlbums()]);
 
-      albumsRef.current = nextAlbums;
-      setItems(nextItems);
-      setAlbums(nextAlbums);
+      commitItemsState(nextItems);
+      commitAlbumsState(nextAlbums);
       void loadLocalStorageStatus();
       setMessage(`${importedCount} external file(s) imported.`);
       setError("");
@@ -2593,57 +2686,94 @@ export function App() {
 
     if (pendingItem) {
       const nextIsFavorite = !pendingItem.isFavorite;
-      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isFavorite: nextIsFavorite } : item)));
+      updateItemsState((current) => current.map((item) => (item.id === itemId ? { ...item, isFavorite: nextIsFavorite } : item)));
       patchPendingUploadRecord(itemId, { isFavorite: nextIsFavorite });
       setMessage(nextIsFavorite ? "File added to favorites." : "File removed from favorites.");
       setError("");
       return;
     }
 
+    const originalItem = itemsRef.current.find((item) => item.id === itemId);
+    if (!originalItem) {
+      return;
+    }
+
+    const optimisticItem = { ...originalItem, isFavorite: !originalItem.isFavorite };
+    updateItemInState(optimisticItem);
+    setMessage(optimisticItem.isFavorite ? "File added to favorites." : "File removed from favorites.");
+    setError("");
+
     try {
       const response = await toggleFavorite(itemId);
       updateItemInState(response.item);
-      setMessage(response.item.isFavorite ? "File added to favorites." : "File removed from favorites.");
-      setError("");
     } catch (caughtError) {
+      updateItemInState(originalItem);
       setError(caughtError instanceof Error ? caughtError.message : "Could not update the favorite state.");
     }
   }
 
   async function handleMoveToTrash(itemId: string): Promise<void> {
     if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
-      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: true } : item)));
+      const nextItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: true } : item)));
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
       patchPendingUploadRecord(itemId, { isTrashed: true });
       setMessage("File moved to the trash.");
       setError("");
       return;
     }
 
+    const originalItem = itemsRef.current.find((item) => item.id === itemId);
+    if (!originalItem) {
+      return;
+    }
+
+    const optimisticItem = { ...originalItem, isTrashed: true };
+    const optimisticItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? optimisticItem : item)));
+    const previousAlbums = albumsRef.current;
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
+    setMessage("File moved to the trash.");
+    setError("");
+
     try {
       const response = await moveToTrash(itemId);
       updateItemInState(response.item);
-      setMessage("File moved to the trash.");
-      setError("");
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, itemsRef.current));
     } catch (caughtError) {
+      updateItemInState(originalItem);
+      commitAlbumsState(previousAlbums);
       setError(caughtError instanceof Error ? caughtError.message : "Could not move the file to the trash.");
     }
   }
 
   async function handleRestoreFromTrash(itemId: string): Promise<void> {
     if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
-      setItems((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: false } : item)));
+      const nextItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: false } : item)));
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
       patchPendingUploadRecord(itemId, { isTrashed: false });
       setMessage("File restored.");
       setError("");
       return;
     }
 
+    const originalItem = itemsRef.current.find((item) => item.id === itemId);
+    if (!originalItem) {
+      return;
+    }
+
+    const optimisticItem = { ...originalItem, isTrashed: false };
+    const optimisticItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? optimisticItem : item)));
+    const previousAlbums = albumsRef.current;
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
+    setMessage("File restored.");
+    setError("");
+
     try {
       const response = await restoreFromTrash(itemId);
       updateItemInState(response.item);
-      setMessage("File restored.");
-      setError("");
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, itemsRef.current));
     } catch (caughtError) {
+      updateItemInState(originalItem);
+      commitAlbumsState(previousAlbums);
       setError(caughtError instanceof Error ? caughtError.message : "Could not restore the file.");
     }
   }
@@ -2707,22 +2837,43 @@ export function App() {
   async function handleDeleteFileConfirm(): Promise<void> {
     if (!deleteFileTarget) return;
 
-    setIsDeletingFile(true);
+    const originalItem = itemsRef.current.find((item) => item.id === deleteFileTarget.id);
+    if (!originalItem) {
+      setDeleteFileTarget(null);
+      return;
+    }
+
+    const originalIndex = itemsRef.current.findIndex((item) => item.id === deleteFileTarget.id);
+    const previousAlbums = albumsRef.current;
+    const nextItems = updateItemsState((current) => current.filter((item) => item.id !== deleteFileTarget.id));
+
+    commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
+    setSelectedItemIds((current) => current.filter((id) => id !== deleteFileTarget.id));
+    if (selectionAnchorRef.current === deleteFileTarget.id) {
+      selectionAnchorRef.current = null;
+    }
+    setMessage("File permanently deleted.");
+    setError("");
+    setDeleteFileTarget(null);
     setDeleteFileError("");
 
     try {
       await deleteLibraryItem(deleteFileTarget.id);
-      removeItemFromState(deleteFileTarget.id);
       void loadLocalStorageStatus();
-      setMessage("File permanently deleted.");
-      setError("");
-      setDeleteFileTarget(null);
     } catch (caughtError) {
       const nextError = caughtError instanceof Error ? caughtError.message : "Could not delete the file.";
+      updateItemsState((current) => {
+        if (current.some((item) => item.id === originalItem.id)) {
+          return current;
+        }
+
+        const nextItemsWithOriginal = [...current];
+        nextItemsWithOriginal.splice(Math.max(0, originalIndex), 0, originalItem);
+        return nextItemsWithOriginal;
+      });
+      commitAlbumsState(previousAlbums);
       setDeleteFileError(nextError);
       setError(nextError);
-    } finally {
-      setIsDeletingFile(false);
     }
   }
 
@@ -2814,7 +2965,7 @@ export function App() {
       applyRemoteConfig(nextConfig);
 
       const nextStatus = await loadLocalStorageStatus();
-      setItems(await getLibraryItems());
+      commitItemsState(await getLibraryItems());
 
       if (requiresLocalMirrorSetup(nextStatus)) {
         setAuthSetupError("The selected local mirror folder is still not available on this computer.");

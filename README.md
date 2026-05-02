@@ -14,6 +14,7 @@ The hosted Discord bot is maintained separately in the sibling `Discasa_bot` rep
 - Local launchers for app-only and full-stack development.
 - Folder uploads that create albums from selected folders, plus nested folders inside albums.
 - Watched-folder imports and duplicate-file collection views.
+- Optimistic library actions so moves, removes, trash, restore, delete, favorite, and album changes appear immediately.
 
 ## Layout
 
@@ -77,9 +78,16 @@ npm run build:server
 - Uploading or dropping a folder at the library root creates an album named after that folder and places the discovered files inside it.
 - Uploading or dropping a folder while an album or folder is open creates a nested folder inside that location. Nested folders are shown in the gallery, not in the sidebar.
 - Folder tiles can be opened from the gallery, and the gallery toolbar includes controls to go up to the parent folder and create a folder in the current album.
+- Folder tiles follow Explorer-style behavior: single click selects the folder and double click opens it.
 - Settings can enable a watched folder, such as a screenshots directory. Discasa periodically imports new stable files from that folder and shows them in the `Watched` collection.
 - Discasa periodically groups duplicate library items in the `Duplicados` collection. The collection appears only while duplicates exist.
 - Moving files between albums is exclusive: files are removed from previous album memberships and kept only in the destination album.
+
+## Interface Responsiveness
+
+Discasa applies common library actions optimistically in the desktop interface and lets the backend finish persistence and Discord snapshot synchronization in the background. Failed operations roll the affected local state back and surface an error.
+
+Settings are grouped by utility, with storage first, interface controls together, account status, diagnostics, and an About tab with version and repository details.
 
 ## Asset Layout
 

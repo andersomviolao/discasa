@@ -100,7 +100,7 @@ export type HsvColor = {
   value: number;
 };
 
-export type SettingsSection = "discord" | "appearance" | "storage" | "language" | "diagnostics" | "window";
+export type SettingsSection = "storage" | "appearance" | "language" | "window" | "discord" | "diagnostics" | "about";
 export type WindowState = "default" | "maximized";
 
 export type FixedLibraryViewId = "all-files" | "favorites" | "trash";

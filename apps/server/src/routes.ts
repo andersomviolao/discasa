@@ -326,6 +326,53 @@ async function syncRemoteLibraryState(): Promise<void> {
   await Promise.all([syncRemoteIndexState(), syncRemoteFolderState()]);
 }
 
+const remoteSyncQueues = new Map<string, { running: boolean; pending: boolean }>();
+
+function queueRemoteSync(label: string, task: () => Promise<void>): void {
+  const queue = remoteSyncQueues.get(label) ?? { running: false, pending: false };
+  remoteSyncQueues.set(label, queue);
+
+  if (queue.running) {
+    queue.pending = true;
+    return;
+  }
+
+  queue.running = true;
+
+  const run = async () => {
+    do {
+      queue.pending = false;
+
+      try {
+        await task();
+      } catch (error) {
+        logger.warn(`[Discasa sync] Background ${label} sync failed.`, error);
+      }
+    } while (queue.pending);
+
+    queue.running = false;
+  };
+
+  void run();
+}
+
+function queueRemoteIndexSync(): void {
+  queueRemoteSync("index", syncRemoteIndexState);
+}
+
+function queueRemoteFolderSync(): void {
+  queueRemoteSync("folder", syncRemoteFolderState);
+}
+
+function queueRemoteConfigSync(): void {
+  queueRemoteSync("config", syncRemoteConfigState);
+}
+
+function queueRemoteLibrarySync(): void {
+  queueRemoteIndexSync();
+  queueRemoteFolderSync();
+}
+
 async function importNewDiscordDriveFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaDriveImportResult> {
   const context = getActiveStorageContext();
   if (!context || env.mockMode) {
@@ -908,7 +955,7 @@ router.get("/config", async (_request, response, next) => {
 router.patch("/config", async (request, response, next) => {
   try {
     const nextConfig = updateDiscasaConfig(request.body ?? {});
-    await syncRemoteConfigState();
+    queueRemoteConfigSync();
     response.json(nextConfig);
   } catch (error) {
     next(error);
@@ -978,7 +1025,7 @@ router.post("/albums", async (request, response, next) => {
     }
 
     const created = addAlbum(name, parentId);
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.status(201).json({ id: created.id, album: created });
   } catch (error) {
     next(error);
@@ -1002,7 +1049,7 @@ router.patch("/albums/:albumId", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json(updated);
   } catch (error) {
     next(error);
@@ -1022,7 +1069,7 @@ router.put("/albums/reorder", async (request, response, next) => {
     }
 
     const albums = reorderAlbums(orderedIds);
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json({ albums });
   } catch (error) {
     next(error);
@@ -1045,7 +1092,7 @@ router.delete("/albums/:albumId", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json({ deleted: true });
   } catch (error) {
     next(error);
@@ -1072,7 +1119,7 @@ router.put("/albums/:albumId/items", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json({ items, albums: getAlbums() });
   } catch (error) {
     next(error);
@@ -1099,7 +1146,7 @@ router.patch("/albums/:albumId/items/move", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json({ items, albums: getAlbums() });
   } catch (error) {
     next(error);
@@ -1126,7 +1173,7 @@ router.patch("/albums/:albumId/items/remove", async (request, response, next) =>
       return;
     }
 
-    await syncRemoteFolderState();
+    queueRemoteFolderSync();
     response.json({ items, albums: getAlbums() });
   } catch (error) {
     next(error);
@@ -1201,7 +1248,7 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
     if (env.mockMode) {
       const uploaded = addMockFiles(files, albumId);
       cacheUploadedFilesForLocalAccess(uploaded, files);
-      await syncRemoteLibraryState();
+      queueRemoteLibrarySync();
       response.status(201).json({ uploaded });
       return;
     }
@@ -1220,7 +1267,7 @@ router.post("/upload", upload.array("files"), async (request, response, next) =>
     }));
     const uploaded = addUploadedFiles(uploadedRecordsWithHashes, albumId);
     cacheUploadedFilesForLocalAccess(uploaded, files);
-    await syncRemoteLibraryState();
+    queueRemoteLibrarySync();
     response.status(201).json({ uploaded });
   } catch (error) {
     next(error);
@@ -1270,7 +1317,7 @@ router.post("/upload-local", async (request, response, next) => {
       uploaded.push(...uploadedBatch);
     }
 
-    await syncRemoteLibraryState();
+    queueRemoteLibrarySync();
     response.status(201).json({ uploaded, albums: getAlbums() });
   } catch (error) {
     next(error);
@@ -1287,7 +1334,7 @@ router.patch("/library/:itemId/favorite", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteIndexState();
+    queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -1327,7 +1374,7 @@ router.patch("/library/:itemId/trash", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteIndexState();
+    queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -1367,7 +1414,7 @@ router.patch("/library/:itemId/restore", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteIndexState();
+    queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -1401,7 +1448,7 @@ router.patch("/library/:itemId/media-edit", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteIndexState();
+    queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -1434,7 +1481,7 @@ router.delete("/library/:itemId/media-edit", async (request, response, next) => 
       return;
     }
 
-    await syncRemoteIndexState();
+    queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
     next(error);
@@ -1468,7 +1515,7 @@ router.delete("/library/:itemId", async (request, response, next) => {
       return;
     }
 
-    await syncRemoteLibraryState();
+    queueRemoteLibrarySync();
     response.json({ deleted: true });
   } catch (error) {
     next(error);

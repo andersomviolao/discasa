@@ -1534,6 +1534,8 @@ type GalleryGridProps = {
 
 type GalleryFolderTileProps = {
   folder: AlbumRecord;
+  isSelected: boolean;
+  onSelectFolder: (folderId: string) => void;
   onOpenFolder: (folderId: string) => void;
 };
 
@@ -1998,16 +2000,21 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   );
 }
 
-function GalleryFolderTile({ folder, onOpenFolder }: GalleryFolderTileProps) {
+function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder }: GalleryFolderTileProps) {
   const childLabel = folder.childFolderCount > 0 ? `, ${folder.childFolderCount} folder${folder.childFolderCount === 1 ? "" : "s"}` : "";
 
   return (
     <button
       type="button"
-      className="folder-tile"
+      className={`folder-tile ${isSelected ? "selected" : ""}`}
       data-album-drop-id={folder.id}
       title={folder.name}
-      onClick={() => onOpenFolder(folder.id)}
+      aria-pressed={isSelected}
+      onPointerDown={(event) => {
+        event.preventDefault();
+      }}
+      onClick={() => onSelectFolder(folder.id)}
+      onDoubleClick={() => onOpenFolder(folder.id)}
     >
       <span className="folder-tile-preview" aria-hidden="true">
         <FolderIcon />
@@ -2086,9 +2093,14 @@ function GalleryGrid({
   const suppressNextItemClickRef = useRef(false);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [internalDragPreview, setInternalDragPreview] = useState<InternalItemDragPreviewState | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
 
   const selectedItemIdSet = new Set(selectedItemIds);
   const draggingItemIdSet = new Set(draggingItemIds);
+
+  useEffect(() => {
+    setSelectedFolderId((current) => (current && folders.some((folder) => folder.id === current) ? current : null));
+  }, [folders]);
 
   function setItemElement(itemId: string, element: HTMLElement | null): void {
     if (element) {
@@ -2107,10 +2119,24 @@ function GalleryGrid({
       return;
     }
 
+    setSelectedFolderId(null);
     onSelectItem(itemId, {
       range: event.shiftKey,
       toggle: event.ctrlKey || event.metaKey,
     });
+  }
+
+  function handleFolderClick(folderId: string): void {
+    setSelectedFolderId(folderId);
+    onClearSelection();
+  }
+
+  function handleFolderDoubleClick(folderId: string): void {
+    if (isBusy) {
+      return;
+    }
+
+    onOpenFolder(folderId);
   }
 
   function handleItemDoubleClick(itemId: string): void {
@@ -2182,6 +2208,7 @@ function GalleryGrid({
 
     const sourceElement = event.currentTarget;
     const pointerId = event.pointerId;
+    event.preventDefault();
 
     try {
       sourceElement.setPointerCapture(pointerId);
@@ -2381,6 +2408,7 @@ function GalleryGrid({
       if (session.hasExceededThreshold) {
         updateSelectionBox(upEvent.clientX, upEvent.clientY);
       } else if (!session.additive) {
+        setSelectedFolderId(null);
         onClearSelection();
       }
 
@@ -2414,7 +2442,13 @@ function GalleryGrid({
       onPointerDown={handleGridPointerDown}
     >
       {folders.map((folder) => (
-        <GalleryFolderTile key={folder.id} folder={folder} onOpenFolder={onOpenFolder} />
+        <GalleryFolderTile
+          key={folder.id}
+          folder={folder}
+          isSelected={selectedFolderId === folder.id}
+          onSelectFolder={handleFolderClick}
+          onOpenFolder={handleFolderDoubleClick}
+        />
       ))}
 
       {items.map((item) => (
@@ -3530,13 +3564,34 @@ type SettingsModalProps = {
   onCommitAccentColor: (value: string) => void;
 };
 
-const settingsSections: Array<{ id: SettingsSection; label: string }> = [
-  { id: "discord", label: "Discord" },
-  { id: "appearance", label: "Appearance" },
-  { id: "storage", label: "Storage" },
-  { id: "language", label: "Language" },
-  { id: "diagnostics", label: "Status" },
-  { id: "window", label: "Window" },
+const DISCASA_APP_VERSION = "0.0.0";
+const DISCASA_APP_REPOSITORY_URL = "https://github.com/Discasa/Discasa";
+const DISCASA_BOT_REPOSITORY_URL = "https://github.com/Discasa/Discasa_bot";
+
+const settingsSectionGroups: Array<{ label: string; sections: Array<{ id: SettingsSection; label: string }> }> = [
+  {
+    label: "Library",
+    sections: [{ id: "storage", label: "Storage" }],
+  },
+  {
+    label: "Interface",
+    sections: [
+      { id: "appearance", label: "Appearance" },
+      { id: "language", label: "Language" },
+      { id: "window", label: "Window" },
+    ],
+  },
+  {
+    label: "Account",
+    sections: [{ id: "discord", label: "Discord" }],
+  },
+  {
+    label: "System",
+    sections: [
+      { id: "diagnostics", label: "Status" },
+      { id: "about", label: "About" },
+    ],
+  },
 ];
 
 type AccentColorPickerProps = {
@@ -3587,11 +3642,11 @@ function AccentColorPicker({ color, onCommitHex }: AccentColorPickerProps) {
       setIsOpen(false);
     };
 
-    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("keydown", handleEscape);
 
     return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("keydown", handleEscape);
     };
   }, [isOpen, color]);
@@ -4248,6 +4303,48 @@ export function SettingsModal({
     );
   }
 
+  function renderAboutContent() {
+    return (
+      <>
+        <div className="settings-modal-header">
+          <div>
+            <h2>About</h2>
+            <p>Discasa desktop app, local backend and repository details.</p>
+          </div>
+        </div>
+
+        <div className="settings-card panel-surface-secondary">
+          <div className="settings-storage-grid" aria-label="Discasa about">
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Version</span>
+              <strong>{DISCASA_APP_VERSION}</strong>
+            </div>
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Desktop</span>
+              <strong>Tauri 2 + React 19</strong>
+            </div>
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Backend</span>
+              <strong>Node.js / Express</strong>
+            </div>
+            <div className="settings-storage-stat">
+              <span className="settings-storage-stat-label">Bot integration</span>
+              <strong>Discasa_bot</strong>
+            </div>
+            <div className="settings-storage-stat wide">
+              <span className="settings-storage-stat-label">App repository</span>
+              <strong>{DISCASA_APP_REPOSITORY_URL}</strong>
+            </div>
+            <div className="settings-storage-stat wide">
+              <span className="settings-storage-stat-label">Bot repository</span>
+              <strong>{DISCASA_BOT_REPOSITORY_URL}</strong>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   function renderContent() {
     if (settingsSection === "discord") {
       return renderDiscordContent();
@@ -4309,6 +4406,10 @@ export function SettingsModal({
 
     if (settingsSection === "diagnostics") {
       return renderDiagnosticsContent();
+    }
+
+    if (settingsSection === "about") {
+      return renderAboutContent();
     }
 
     return (
@@ -4393,19 +4494,21 @@ export function SettingsModal({
           </div>
         </div>
 
-        <div className="settings-modal-nav-group">
-          <span className="settings-modal-nav-label">Settings</span>
-          {settingsSections.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              className={`settings-modal-nav-item ${settingsSection === section.id ? "active" : ""}`}
-              onClick={() => onSelectSection(section.id)}
-            >
-              {section.label}
-            </button>
-          ))}
-        </div>
+        {settingsSectionGroups.map((group) => (
+          <div key={group.label} className="settings-modal-nav-group">
+            <span className="settings-modal-nav-label">{group.label}</span>
+            {group.sections.map((section) => (
+              <button
+                key={section.id}
+                type="button"
+                className={`settings-modal-nav-item ${settingsSection === section.id ? "active" : ""}`}
+                onClick={() => onSelectSection(section.id)}
+              >
+                {section.label}
+              </button>
+            ))}
+          </div>
+        ))}
       </aside>
 
       <section className="settings-modal-content scrollable-y subtle-scrollbar content-scrollbar-host">

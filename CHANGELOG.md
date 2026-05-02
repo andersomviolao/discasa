@@ -2,6 +2,13 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-02-file-action-bar-busy-state]
+
+### Fixed
+
+- Fixed the selected-file action bar staying disabled after background library work by limiting the gallery busy lock to the initial empty bootstrap.
+- Downloading selected files no longer blocks unrelated library selection and file actions.
+
 ## [2026-05-02-developer-docs-and-folder-sizing]
 
 ### Changed

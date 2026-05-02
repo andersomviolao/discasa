@@ -650,6 +650,7 @@ export function App() {
 
   const thumbnailZoomPercent = THUMBNAIL_ZOOM_LEVELS[thumbnailZoomIndex] ?? DEFAULT_THUMBNAIL_ZOOM_PERCENT;
   const thumbnailSize = getThumbnailSizeFromZoomPercent(thumbnailZoomPercent);
+  const isLibraryInteractionBusy = isBusy && items.length === 0 && albums.length === 0;
 
   function cacheLibraryState(next: {
     guildId?: string | null;
@@ -1769,7 +1770,7 @@ export function App() {
   }
 
   function openMoveItemsModal(): void {
-    if (isBusy || selectedItemIds.length === 0 || albums.length === 0) {
+    if (selectedItemIds.length === 0 || albums.length === 0) {
       return;
     }
 
@@ -2781,16 +2782,11 @@ export function App() {
   async function handleDownloadSelectedItems(targets: LibraryItem[]): Promise<void> {
     const downloadableItems = targets.filter((item) => item.attachmentStatus !== "missing");
 
-    if (isBusy) {
-      return;
-    }
-
     if (downloadableItems.length === 0) {
       setError("Selected files are unavailable for download.");
       return;
     }
 
-    setIsBusy(true);
     setError("");
 
     try {
@@ -2798,8 +2794,6 @@ export function App() {
       setMessage(`${downloadableItems.length} file(s) sent to downloads.`);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Could not download the selected files.");
-    } finally {
-      setIsBusy(false);
     }
   }
 
@@ -3302,7 +3296,7 @@ export function App() {
             currentAlbumId={selectedView.kind === "album" ? selectedView.id : null}
             parentFolderId={currentFolder?.parentId ?? null}
             canMoveSelectedItems={albums.length > 0}
-            isBusy={isBusy}
+            isBusy={isLibraryInteractionBusy}
             isDraggingFiles={isDraggingFiles}
             galleryDisplayMode={galleryDisplayMode}
             thumbnailSize={thumbnailSize}

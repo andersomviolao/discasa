@@ -2,6 +2,23 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-02-durable-bulk-trash]
+
+### Added
+
+- Added a bulk trash API that persists UI state immediately and moves Discord storage in the background.
+- Added a persisted pending remote operation journal so unfinished trash storage moves resume after restart.
+
+### Changed
+
+- Trash storage moves can fall back to the local mirror or thumbnail cache when Discord attachment URLs are no longer downloadable.
+- Duplicate detection now only uses exact content hashes and no longer groups files by metadata alone.
+
+### Fixed
+
+- Fixed large trash operations feeling blocked while Discord storage is copied.
+- Fixed missing Discord attachments preventing locally cached files from being moved to trash.
+
 ## [2026-05-02-file-action-bar-busy-state]
 
 ### Fixed

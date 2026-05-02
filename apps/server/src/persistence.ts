@@ -47,6 +47,20 @@ export type ActiveStorageContext = {
   configChannelName: string;
 };
 
+export type PendingRemoteOperationTarget = "drive" | "trash";
+
+export type PendingRemoteOperation = {
+  id: string;
+  type: "move-item-storage";
+  itemId: string;
+  target: PendingRemoteOperationTarget;
+  context: ActiveStorageContext;
+  createdAt: string;
+  updatedAt: string;
+  attemptCount: number;
+  lastError?: string;
+};
+
 export type LocalSourceFile = {
   filePath: string;
   fileName: string;
@@ -116,6 +130,7 @@ type MockDatabase = {
   folders: PersistedFolderNode[];
   memberships: PersistedFolderMembership[];
   items: PersistedItem[];
+  pendingRemoteOperations: PendingRemoteOperation[];
   config: DiscasaConfig;
   activeStorage: ActiveStorageContext | null;
 };
@@ -391,6 +406,7 @@ function createDefaultDatabase(): MockDatabase {
     folders: [],
     memberships: [],
     items: [],
+    pendingRemoteOperations: [],
     config: cloneDefaultConfig(),
     activeStorage: null,
   };
@@ -505,6 +521,49 @@ function migrateLegacyActiveStorage(raw: LegacyActiveStorage): ActiveStorageCont
     trashChannelName: raw.trashChannelName,
     configChannelId: raw.configChannelId && raw.configChannelId.length > 0 ? raw.configChannelId : raw.indexChannelId,
     configChannelName: raw.configChannelName && raw.configChannelName.length > 0 ? raw.configChannelName : "discasa-config",
+  };
+}
+
+function normalizeActiveStorageContext(raw: unknown): ActiveStorageContext | null {
+  return isLegacyActiveStorage(raw) ? migrateLegacyActiveStorage(raw) : null;
+}
+
+function normalizePendingRemoteOperation(raw: unknown): PendingRemoteOperation | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const entry = raw as Record<string, unknown>;
+  const context = normalizeActiveStorageContext(entry.context);
+  const target = entry.target === "drive" || entry.target === "trash" ? entry.target : null;
+
+  if (
+    typeof entry.id !== "string" ||
+    entry.id.length === 0 ||
+    entry.type !== "move-item-storage" ||
+    typeof entry.itemId !== "string" ||
+    entry.itemId.length === 0 ||
+    !target ||
+    !context ||
+    typeof entry.createdAt !== "string" ||
+    typeof entry.updatedAt !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    id: entry.id,
+    type: "move-item-storage",
+    itemId: entry.itemId,
+    target,
+    context,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    attemptCount:
+      typeof entry.attemptCount === "number" && Number.isInteger(entry.attemptCount) && entry.attemptCount >= 0
+        ? entry.attemptCount
+        : 0,
+    lastError: typeof entry.lastError === "string" && entry.lastError.length > 0 ? entry.lastError : undefined,
   };
 }
 
@@ -835,7 +894,13 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
     : [];
 
   const config = normalizeDiscasaConfig(raw?.config);
-  const activeStorage = isLegacyActiveStorage(raw?.activeStorage) ? migrateLegacyActiveStorage(raw.activeStorage) : fallback.activeStorage;
+  const activeStorage = normalizeActiveStorageContext(raw?.activeStorage) ?? fallback.activeStorage;
+  const itemIds = new Set(items.map((item) => item.id));
+  const pendingRemoteOperations = Array.isArray(raw?.pendingRemoteOperations)
+    ? raw.pendingRemoteOperations
+        .map((entry) => normalizePendingRemoteOperation(entry))
+        .filter((entry): entry is PendingRemoteOperation => Boolean(entry && itemIds.has(entry.itemId)))
+    : fallback.pendingRemoteOperations;
 
   const foldersFromSnapshot = Array.isArray(raw?.folders)
     ? raw.folders.map((entry) => normalizeFolderNode(entry)).filter((entry): entry is PersistedFolderNode => Boolean(entry))
@@ -847,7 +912,6 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
 
   if (foldersFromSnapshot && membershipsFromSnapshot) {
     const folderIds = new Set(foldersFromSnapshot.map((folder) => folder.id));
-    const itemIds = new Set(items.map((item) => item.id));
 
     return {
       folders: foldersFromSnapshot.sort((left, right) => left.position - right.position),
@@ -855,6 +919,7 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
         (membership) => folderIds.has(membership.folderId) && itemIds.has(membership.itemId),
       ),
       items,
+      pendingRemoteOperations,
       config,
       activeStorage,
     };
@@ -876,6 +941,7 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
       folders: migrated.folders,
       memberships: migrated.memberships,
       items: migrated.nextItems,
+      pendingRemoteOperations,
       config,
       activeStorage,
     };
@@ -885,6 +951,7 @@ function normalizeDatabase(raw: Partial<MockDatabase & LegacyMockDatabase> | nul
     folders: [],
     memberships: [],
     items,
+    pendingRemoteOperations,
     config,
     activeStorage,
   };
@@ -917,6 +984,43 @@ const database = loadDatabase();
 function saveDatabase(): void {
   ensureDataDir();
   fs.writeFileSync(dataFile, JSON.stringify(database, null, 2), "utf8");
+}
+
+function applyPendingRemoteOperationIntent(): boolean {
+  const itemsById = new Map(database.items.map((item) => [item.id, item]));
+  const latestOperationByItem = new Map<string, PendingRemoteOperation>();
+  let didChange = false;
+
+  database.pendingRemoteOperations = database.pendingRemoteOperations.filter((operation) => {
+    const hasItem = itemsById.has(operation.itemId);
+    didChange = didChange || !hasItem;
+    return hasItem;
+  });
+
+  for (const operation of database.pendingRemoteOperations) {
+    latestOperationByItem.set(operation.itemId, operation);
+  }
+
+  for (const [itemId, operation] of latestOperationByItem) {
+    const item = itemsById.get(itemId);
+    if (!item) {
+      continue;
+    }
+
+    const nextIsTrashed = operation.target === "trash";
+    if (item.isTrashed !== nextIsTrashed) {
+      item.isTrashed = nextIsTrashed;
+      didChange = true;
+    }
+  }
+
+  return didChange;
+}
+
+export function reconcilePendingRemoteOperations(): void {
+  if (applyPendingRemoteOperationIntent()) {
+    saveDatabase();
+  }
 }
 
 function sanitizeManagedFileName(value: string): string {
@@ -1694,6 +1798,7 @@ export function replaceDatabaseFromIndexSnapshot(snapshot: PersistedIndexSnapsho
     database.folders = migrated.folders;
     database.memberships = migrated.memberships;
     database.items = migrated.nextItems;
+    applyPendingRemoteOperationIntent();
     saveDatabase();
     return;
   }
@@ -1705,6 +1810,7 @@ export function replaceDatabaseFromIndexSnapshot(snapshot: PersistedIndexSnapsho
   database.items = nextItems;
   const itemIds = new Set(database.items.map((item) => item.id));
   database.memberships = database.memberships.filter((membership) => itemIds.has(membership.itemId));
+  applyPendingRemoteOperationIntent();
   saveDatabase();
 }
 
@@ -1888,6 +1994,118 @@ export function getLocalStorageStatus(): LocalStorageStatus {
     watchedFolderPath,
     watchedFolderPathExists: Boolean(watchedFolderPath && hasDirectory(watchedFolderPath)),
   };
+}
+
+export function getPendingRemoteOperations(): PendingRemoteOperation[] {
+  return database.pendingRemoteOperations.map((operation) => ({ ...operation, context: { ...operation.context } }));
+}
+
+export function getPendingRemoteOperation(operationId: string): PendingRemoteOperation | null {
+  const operation = database.pendingRemoteOperations.find((entry) => entry.id === operationId);
+  return operation ? { ...operation, context: { ...operation.context } } : null;
+}
+
+export function enqueuePendingMoveItemStorageOperations(
+  itemIds: string[],
+  target: PendingRemoteOperationTarget,
+  context: ActiveStorageContext,
+): PendingRemoteOperation[] {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  const itemIdSet = new Set(database.items.map((item) => item.id));
+  const timestamp = new Date().toISOString();
+  const operations: PendingRemoteOperation[] = [];
+
+  for (const itemId of uniqueItemIds) {
+    if (!itemIdSet.has(itemId)) {
+      continue;
+    }
+
+    const existing = database.pendingRemoteOperations.find(
+      (operation) => operation.type === "move-item-storage" && operation.itemId === itemId,
+    );
+
+    if (existing) {
+      existing.target = target;
+      existing.context = { ...context };
+      existing.updatedAt = timestamp;
+      existing.attemptCount = 0;
+      existing.lastError = undefined;
+      operations.push({ ...existing, context: { ...existing.context } });
+      continue;
+    }
+
+    const operation: PendingRemoteOperation = {
+      id: nanoid(12),
+      type: "move-item-storage",
+      itemId,
+      target,
+      context: { ...context },
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      attemptCount: 0,
+    };
+
+    database.pendingRemoteOperations.push(operation);
+    operations.push({ ...operation, context: { ...operation.context } });
+  }
+
+  if (operations.length > 0) {
+    applyPendingRemoteOperationIntent();
+    saveDatabase();
+  }
+
+  return operations;
+}
+
+export function completePendingRemoteOperation(operationId: string): void {
+  const beforeCount = database.pendingRemoteOperations.length;
+  database.pendingRemoteOperations = database.pendingRemoteOperations.filter((operation) => operation.id !== operationId);
+
+  if (database.pendingRemoteOperations.length !== beforeCount) {
+    saveDatabase();
+  }
+}
+
+export function failPendingRemoteOperation(operationId: string, error: unknown): void {
+  const operation = database.pendingRemoteOperations.find((entry) => entry.id === operationId);
+  if (!operation) {
+    return;
+  }
+
+  operation.attemptCount += 1;
+  operation.updatedAt = new Date().toISOString();
+  operation.lastError = error instanceof Error ? error.message : String(error);
+  saveDatabase();
+}
+
+export function getLocalSourceFileForLibraryItem(itemId: string): LocalSourceFile | null {
+  const item = findPersistedItem(itemId);
+  if (!item) {
+    return null;
+  }
+
+  const candidatePaths = [getLocalMirrorFilePath(item), getThumbnailCacheFilePath(item)];
+  for (const filePath of candidatePaths) {
+    if (!hasReadableFile(filePath)) {
+      continue;
+    }
+
+    const stat = fs.statSync(filePath);
+    if (stat.size !== item.size) {
+      continue;
+    }
+
+    return {
+      filePath,
+      fileName: item.name,
+      fileSize: stat.size,
+      mimeType: item.mimeType,
+      modifiedAt: stat.mtime.toISOString(),
+      contentHash: item.contentHash,
+    };
+  }
+
+  return null;
 }
 
 export function cacheUploadedFilesForLocalAccess(items: LibraryItem[], files: Express.Multer.File[]): void {
@@ -2268,14 +2486,34 @@ export function toggleFavoriteState(itemId: string): LibraryItem | null {
 }
 
 export function trashLibraryItem(itemId: string): LibraryItem | null {
-  const item = database.items.find((entry) => entry.id === itemId);
-  if (!item) {
-    return null;
+  return trashLibraryItems([itemId])[0] ?? null;
+}
+
+export function trashLibraryItems(itemIds: string[]): LibraryItem[] {
+  const uniqueItemIds = Array.from(new Set(itemIds));
+  if (!uniqueItemIds.length) {
+    return [];
   }
 
-  item.isTrashed = true;
-  saveDatabase();
-  return getLibraryItem(itemId);
+  const itemIdSet = new Set(uniqueItemIds);
+  let didChange = false;
+
+  for (const item of database.items) {
+    if (!itemIdSet.has(item.id)) {
+      continue;
+    }
+
+    if (!item.isTrashed) {
+      item.isTrashed = true;
+      didChange = true;
+    }
+  }
+
+  if (didChange) {
+    saveDatabase();
+  }
+
+  return getHydratedLibraryItems().filter((item) => itemIdSet.has(item.id));
 }
 
 export function restoreLibraryItem(itemId: string): LibraryItem | null {

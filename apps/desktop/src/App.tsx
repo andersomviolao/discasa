@@ -57,6 +57,7 @@ import {
   inspectLocalFilePaths,
   initializeDiscasa,
   moveLibraryItemsToAlbum,
+  moveItemsToTrash,
   moveToTrash,
   openDiscordBotInstall,
   openDiscordLogin,
@@ -2713,37 +2714,62 @@ export function App() {
     }
   }
 
-  async function handleMoveToTrash(itemId: string): Promise<void> {
-    if (itemsRef.current.some((item) => item.id === itemId && isPendingUploadItem(item))) {
-      const nextItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? { ...item, isTrashed: true } : item)));
-      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
-      patchPendingUploadRecord(itemId, { isTrashed: true });
-      setMessage("File moved to the trash.");
-      setError("");
+  async function handleMoveItemsToTrash(itemIds: string[]): Promise<void> {
+    const uniqueItemIds = Array.from(new Set(itemIds));
+    if (uniqueItemIds.length === 0) {
       return;
     }
 
-    const originalItem = itemsRef.current.find((item) => item.id === itemId);
-    if (!originalItem) {
+    const currentItemsById = new Map(itemsRef.current.map((item) => [item.id, item]));
+    const existingItemIds = uniqueItemIds.filter((itemId) => currentItemsById.has(itemId));
+    if (existingItemIds.length === 0) {
       return;
     }
 
-    const optimisticItem = { ...originalItem, isTrashed: true };
-    const optimisticItems = updateItemsState((current) => current.map((item) => (item.id === itemId ? optimisticItem : item)));
+    const pendingUploadItems = existingItemIds
+      .map((itemId) => currentItemsById.get(itemId))
+      .filter((item): item is PendingUploadItem => Boolean(item && isPendingUploadItem(item)));
+    const pendingUploadState = new Map(pendingUploadItems.map((item) => [item.id, item.isTrashed]));
+    const realItemIds = existingItemIds.filter((itemId) => {
+      const item = currentItemsById.get(itemId);
+      return item && !isPendingUploadItem(item);
+    });
+    const movingItemIdSet = new Set(existingItemIds);
+    const previousItems = itemsRef.current;
     const previousAlbums = albumsRef.current;
+
+    const optimisticItems = updateItemsState((current) =>
+      current.map((item) => (movingItemIdSet.has(item.id) ? { ...item, isTrashed: true } : item)),
+    );
     commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, optimisticItems));
-    setMessage("File moved to the trash.");
+    for (const pendingItem of pendingUploadItems) {
+      patchPendingUploadRecord(pendingItem.id, { isTrashed: true });
+    }
+
+    setMessage(`${existingItemIds.length} file(s) moved to the trash.`);
     setError("");
 
-    try {
-      const response = await moveToTrash(itemId);
-      updateItemInState(response.item);
-      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, itemsRef.current));
-    } catch (caughtError) {
-      updateItemInState(originalItem);
-      commitAlbumsState(previousAlbums);
-      setError(caughtError instanceof Error ? caughtError.message : "Could not move the file to the trash.");
+    if (realItemIds.length === 0) {
+      return;
     }
+
+    try {
+      const response = await moveItemsToTrash(realItemIds);
+      const updatedItemsById = new Map(response.items.map((item) => [item.id, item]));
+      const nextItems = updateItemsState((current) => current.map((item) => updatedItemsById.get(item.id) ?? item));
+      commitAlbumsState(recalculateAlbumItemCounts(albumsRef.current, nextItems));
+    } catch (caughtError) {
+      commitItemsState(previousItems);
+      commitAlbumsState(previousAlbums);
+      for (const [pendingItemId, wasTrashed] of pendingUploadState) {
+        patchPendingUploadRecord(pendingItemId, { isTrashed: wasTrashed });
+      }
+      setError(caughtError instanceof Error ? caughtError.message : "Could not move the files to the trash.");
+    }
+  }
+
+  async function handleMoveToTrash(itemId: string): Promise<void> {
+    await handleMoveItemsToTrash([itemId]);
   }
 
   async function handleRestoreFromTrash(itemId: string): Promise<void> {
@@ -3357,6 +3383,7 @@ export function App() {
             onOpenMoveItemsModal={openMoveItemsModal}
             onRemoveItemsFromAlbum={handleRemoveItemsFromAlbum}
             onMoveToTrash={handleMoveToTrash}
+            onMoveItemsToTrash={handleMoveItemsToTrash}
             onRestoreFromTrash={handleRestoreFromTrash}
             onDownloadSelected={handleDownloadSelectedItems}
             onSaveMediaEdit={handleSaveMediaEdit}

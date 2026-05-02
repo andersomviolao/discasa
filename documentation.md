@@ -170,6 +170,13 @@ Discasa
 
 The app treats Discord snapshots as durable remote state. The local backend persists local state first, then syncs snapshots through the bot. The bot stores the JSON it receives; it should not reinterpret product meaning.
 
+Trash movement is split into two phases:
+
+1. The backend marks items as trashed locally and records a pending remote operation before responding to the UI.
+2. A background worker moves the Discord attachment or chunk manifest into `discasa-trash`, updates storage pointers, clears the pending operation, and syncs the index snapshot.
+
+This keeps large batch actions fast in the UI while preserving recovery after a forced shutdown. If a stored Discord attachment URL has expired, the worker can reupload from the local mirror or thumbnail cache when a size-matched local file exists.
+
 ## 9. Local Backend API
 
 Frontend helpers in `apps/desktop/src/lib/app-logic.ts` call the local backend routes in `apps/server/src/routes.ts`.
@@ -205,6 +212,7 @@ GET    /api/library/:itemId/thumbnail
 POST   /api/upload
 POST   /api/upload-local
 PATCH  /api/library/:itemId/favorite
+PATCH  /api/library/trash
 PATCH  /api/library/:itemId/trash
 PATCH  /api/library/:itemId/restore
 PATCH  /api/library/:itemId/media-edit
@@ -217,7 +225,7 @@ POST   /auth/discord/logout
 GET    /auth/discord/callback
 ```
 
-Action routes persist local state before responding. For common action routes, Discord snapshot sync is queued in the background so the UI does not wait for remote writes.
+Action routes persist local state before responding. For common action routes, Discord snapshot sync is queued in the background so the UI does not wait for remote writes. Use `PATCH /api/library/trash` for bulk trash moves; it accepts `{ "itemIds": string[] }` and returns after local persistence.
 
 ## 10. Upload Flow
 
@@ -261,7 +269,7 @@ apps/desktop/src/App.tsx
 apps/server/src/routes.ts
   /api/upload-local
 
-apps/server/src/local-storage.ts
+apps/server/src/persistence.ts
   local file reading and cache helpers
 ```
 
@@ -303,7 +311,7 @@ The watched-folder scanner is app-owned. The bot only stores snapshot metadata.
 
 ## 14. Duplicate Detection
 
-The desktop periodically groups duplicates without scanning too aggressively. Exact content hashes are preferred. Older files without hashes use metadata fallback.
+The desktop periodically groups duplicates without scanning too aggressively. Duplicate detection must use exact content hashes only: `storageManifest.sha256` for chunked files or `contentHash` for regular files. Do not group files by name, size, or MIME type alone; that creates false positives when unrelated files share metadata.
 
 The `Duplicados` collection appears only while duplicate groups exist. UI ordering should keep duplicate pairs/groups adjacent enough for the user to compare.
 
@@ -329,6 +337,8 @@ When adding a new optimistic action, capture enough previous state to roll back:
 - affected albums;
 - selected view and selected ids if navigation changes;
 - pending upload records if pending items are affected.
+
+Bulk trash has an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord movement is half-finished.
 
 ## 16. Media Viewer And Saved Edits
 

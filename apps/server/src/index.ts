@@ -5,7 +5,7 @@ import { env } from "./config";
 import { sendErrorResponse } from "./errors";
 import { logger } from "./logger";
 import { hydrateSessionFromPersistedAuth } from "./persistence";
-import { apiRouter, authRouter } from "./routes";
+import { apiRouter, authRouter, resumePendingRemoteOperations } from "./routes";
 
 declare module "express-session" {
   interface SessionData {
@@ -84,4 +84,5 @@ app.use((error: unknown, _request: express.Request, response: express.Response, 
 app.listen(env.port, () => {
   logger.info(`Local server running on http://localhost:${env.port}`);
   logger.info(`Mock mode: ${env.mockMode}`);
+  resumePendingRemoteOperations();
 });

@@ -117,6 +117,10 @@ export type LocalUploadableFile = {
   modifiedAt: string;
 };
 
+type MoveStoredItemOptions = {
+  localFile?: LocalUploadableFile | null;
+};
+
 const CHUNK_UPLOAD_SAFETY_BYTES = 512 * 1024;
 const MIN_CHUNK_SIZE_BYTES = 1024 * 1024;
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
@@ -508,6 +512,17 @@ export async function uploadLocalFilesToDiscordDrive(
   }
 
   return uploaded;
+}
+
+async function uploadLocalFileToDiscordChannel(
+  file: LocalUploadableFile,
+  context: ActiveStorageContext,
+  targetChannelId: string,
+): Promise<UploadedFileRecord> {
+  const uploadLimitBytes = await getDiscordUploadLimitForGuild(context.guildId);
+  return file.fileSize <= uploadLimitBytes
+    ? uploadSingleLocalFileToDiscordChannel(file, context, targetChannelId)
+    : uploadChunkedLocalFileToDiscordChannel(file, context, targetChannelId, uploadLimitBytes);
 }
 
 type KnownDriveAttachmentIndex = {
@@ -1033,10 +1048,38 @@ function createRecordFromChunkedManifest(
   };
 }
 
+async function uploadLocalFallbackToChannel(
+  context: ActiveStorageContext,
+  item: LibraryItem,
+  targetChannelId: string,
+  localFile?: LocalUploadableFile | null,
+): Promise<UploadedFileRecord | null> {
+  if (!localFile || localFile.fileSize !== item.size) {
+    return null;
+  }
+
+  const moved = await uploadLocalFileToDiscordChannel(
+    {
+      ...localFile,
+      fileName: item.name,
+      mimeType: item.mimeType || localFile.mimeType || "application/octet-stream",
+    },
+    context,
+    targetChannelId,
+  );
+
+  return {
+    ...moved,
+    fileSize: item.size,
+    mimeType: item.mimeType || moved.mimeType,
+  };
+}
+
 async function moveSingleStoredItemToChannel(
   context: ActiveStorageContext,
   item: LibraryItem,
   targetChannelId: string,
+  options: MoveStoredItemOptions = {},
 ): Promise<UploadedFileRecord> {
   if (item.storageChannelId === targetChannelId && item.storageMessageId) {
     return {
@@ -1051,7 +1094,23 @@ async function moveSingleStoredItemToChannel(
     };
   }
 
-  const buffer = await downloadAttachmentBuffer(item.attachmentUrl);
+  let buffer: Buffer;
+  try {
+    buffer = await downloadAttachmentBuffer(item.attachmentUrl);
+  } catch (error) {
+    const fallback = await uploadLocalFallbackToChannel(context, item, targetChannelId, options.localFile);
+    if (!fallback) {
+      throw error;
+    }
+
+    const oldMessage = getSingleStorageMessage(item);
+    if (oldMessage) {
+      await deleteStorageMessages(context, [oldMessage]);
+    }
+
+    return fallback;
+  }
+
   const moved = await uploadSingleFileToDiscordChannel(
     {
       originalname: item.name,
@@ -1078,6 +1137,7 @@ async function moveChunkedStoredItemToChannel(
   context: ActiveStorageContext,
   item: LibraryItem,
   targetChannelId: string,
+  options: MoveStoredItemOptions = {},
 ): Promise<UploadedFileRecord> {
   if (!hasChunkedStorage(item)) {
     throw new Error(`"${item.name}" is not stored as a chunked file.`);
@@ -1089,33 +1149,50 @@ async function moveChunkedStoredItemToChannel(
 
   const nextParts: LibraryItemStoragePart[] = [];
 
-  for (const part of item.storageManifest.parts) {
-    const buffer = await downloadAttachmentBuffer(part.attachmentUrl);
-    if (buffer.byteLength !== part.size || hashBuffer(buffer) !== part.sha256) {
-      throw new Error(`Chunk ${part.index + 1} for "${item.name}" failed integrity validation.`);
+  try {
+    for (const part of item.storageManifest.parts) {
+      const buffer = await downloadAttachmentBuffer(part.attachmentUrl);
+      if (buffer.byteLength !== part.size || hashBuffer(buffer) !== part.sha256) {
+        throw new Error(`Chunk ${part.index + 1} for "${item.name}" failed integrity validation.`);
+      }
+
+      const uploadedPart = await uploadSingleFileToDiscordChannel(
+        {
+          originalname: part.fileName,
+          mimetype: "application/octet-stream",
+          buffer,
+          size: part.size,
+        },
+        context,
+        targetChannelId,
+      );
+
+      if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
+        throw new Error(`Discord did not return storage metadata for ${part.fileName}.`);
+      }
+
+      nextParts.push({
+        ...part,
+        attachmentUrl: uploadedPart.attachmentUrl,
+        storageChannelId: uploadedPart.storageChannelId,
+        storageMessageId: uploadedPart.storageMessageId,
+      });
+    }
+  } catch (error) {
+    const fallback = await uploadLocalFallbackToChannel(context, item, targetChannelId, options.localFile);
+    if (!fallback) {
+      throw error;
     }
 
-    const uploadedPart = await uploadSingleFileToDiscordChannel(
-      {
-        originalname: part.fileName,
-        mimetype: "application/octet-stream",
-        buffer,
-        size: part.size,
-      },
+    await deleteStorageMessages(
       context,
-      targetChannelId,
+      item.storageManifest.parts.map((part) => ({
+        channelId: part.storageChannelId,
+        messageId: part.storageMessageId,
+      })),
     );
 
-    if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
-      throw new Error(`Discord did not return storage metadata for ${part.fileName}.`);
-    }
-
-    nextParts.push({
-      ...part,
-      attachmentUrl: uploadedPart.attachmentUrl,
-      storageChannelId: uploadedPart.storageChannelId,
-      storageMessageId: uploadedPart.storageMessageId,
-    });
+    return fallback;
   }
 
   await deleteStorageMessages(
@@ -1136,24 +1213,27 @@ async function moveStoredItemToChannel(
   context: ActiveStorageContext,
   item: LibraryItem,
   targetChannelId: string,
+  options: MoveStoredItemOptions = {},
 ): Promise<UploadedFileRecord> {
   return hasChunkedStorage(item)
-    ? moveChunkedStoredItemToChannel(context, item, targetChannelId)
-    : moveSingleStoredItemToChannel(context, item, targetChannelId);
+    ? moveChunkedStoredItemToChannel(context, item, targetChannelId, options)
+    : moveSingleStoredItemToChannel(context, item, targetChannelId, options);
 }
 
 export async function moveStoredItemToTrash(
   context: ActiveStorageContext,
   item: LibraryItem,
+  options: MoveStoredItemOptions = {},
 ): Promise<UploadedFileRecord> {
-  return moveStoredItemToChannel(context, item, context.trashChannelId);
+  return moveStoredItemToChannel(context, item, context.trashChannelId, options);
 }
 
 export async function restoreStoredItemFromTrash(
   context: ActiveStorageContext,
   item: LibraryItem,
+  options: MoveStoredItemOptions = {},
 ): Promise<UploadedFileRecord> {
-  return moveStoredItemToChannel(context, item, context.driveChannelId);
+  return moveStoredItemToChannel(context, item, context.driveChannelId, options);
 }
 
 export async function deleteStoredItemFromDiscord(

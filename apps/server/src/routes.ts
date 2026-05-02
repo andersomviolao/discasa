@@ -28,17 +28,25 @@ import {
   createIndexSnapshot,
   deleteAlbum,
   deleteLibraryItem,
+  completePendingRemoteOperation,
+  enqueuePendingMoveItemStorageOperations,
+  failPendingRemoteOperation,
   getActiveStorageContext,
   getAlbums,
   getDiscasaConfig,
+  getLocalSourceFileForLibraryItem,
   getLibraryItemContentSource,
   getLibraryItemThumbnailSource,
   getLibraryItem,
   getLibraryItems,
   getLocalStorageStatus,
+  getPendingRemoteOperation,
+  getPendingRemoteOperations,
+  type PendingRemoteOperation,
   type LocalSourceFile,
   moveLibraryItemsToAlbum,
   renameAlbum,
+  reconcilePendingRemoteOperations,
   removeLibraryItemsFromAlbum,
   reorderAlbums,
   replaceConfigFromSnapshot,
@@ -54,6 +62,7 @@ import {
   scanWatchedFolderImportCandidates,
   toggleFavoriteState,
   trashLibraryItem,
+  trashLibraryItems,
   updateDiscasaConfig,
   updateLibraryItemStorage,
 } from "./persistence";
@@ -373,6 +382,95 @@ function queueRemoteLibrarySync(): void {
   queueRemoteFolderSync();
 }
 
+let pendingRemoteOperationDrainRunning = false;
+let pendingRemoteOperationDrainRequested = false;
+
+function readItemIds(rawItemIds: unknown): string[] {
+  if (!Array.isArray(rawItemIds)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      rawItemIds
+        .map((itemId) => (typeof itemId === "string" ? itemId.trim() : ""))
+        .filter((itemId) => itemId.length > 0),
+    ),
+  );
+}
+
+async function processPendingRemoteOperation(operation: PendingRemoteOperation): Promise<void> {
+  const currentOperation = getPendingRemoteOperation(operation.id);
+  if (!currentOperation) {
+    return;
+  }
+
+  const item = getLibraryItem(currentOperation.itemId);
+  if (!item) {
+    completePendingRemoteOperation(currentOperation.id);
+    return;
+  }
+
+  if (
+    (currentOperation.target === "trash" && !item.isTrashed) ||
+    (currentOperation.target === "drive" && item.isTrashed)
+  ) {
+    completePendingRemoteOperation(currentOperation.id);
+    return;
+  }
+
+  const localFile = getLocalSourceFileForLibraryItem(item.id);
+  const movedRecord =
+    currentOperation.target === "trash"
+      ? await moveStoredItemToTrash(currentOperation.context, item, { localFile })
+      : await restoreStoredItemFromTrash(currentOperation.context, item, { localFile });
+
+  updateLibraryItemStorage(item.id, {
+    guildId: movedRecord.guildId,
+    attachmentUrl: movedRecord.attachmentUrl,
+    storageChannelId: movedRecord.storageChannelId,
+    storageMessageId: movedRecord.storageMessageId,
+    storageManifest: movedRecord.storageManifest,
+  });
+  completePendingRemoteOperation(currentOperation.id);
+  queueRemoteIndexSync();
+}
+
+async function drainPendingRemoteOperations(): Promise<void> {
+  if (env.mockMode) {
+    return;
+  }
+
+  if (pendingRemoteOperationDrainRunning) {
+    pendingRemoteOperationDrainRequested = true;
+    return;
+  }
+
+  pendingRemoteOperationDrainRunning = true;
+
+  try {
+    do {
+      pendingRemoteOperationDrainRequested = false;
+
+      for (const operation of getPendingRemoteOperations()) {
+        try {
+          await processPendingRemoteOperation(operation);
+        } catch (error) {
+          failPendingRemoteOperation(operation.id, error);
+          logger.warn(`[Discasa remote operations] Could not finish ${operation.type} for ${operation.itemId}.`, error);
+        }
+      }
+    } while (pendingRemoteOperationDrainRequested);
+  } finally {
+    pendingRemoteOperationDrainRunning = false;
+  }
+}
+
+export function resumePendingRemoteOperations(): void {
+  reconcilePendingRemoteOperations();
+  void drainPendingRemoteOperations();
+}
+
 async function importNewDiscordDriveFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaDriveImportResult> {
   const context = getActiveStorageContext();
   if (!context || env.mockMode) {
@@ -561,6 +659,8 @@ async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolea
       replaceDatabaseFromFolderSnapshot(folderSnapshot);
     }
 
+    reconcilePendingRemoteOperations();
+
     if (options.importExternalFiles !== false) {
       try {
         const importResult = await importExternalLibraryFiles();
@@ -572,6 +672,7 @@ async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolea
       }
     }
 
+    void drainPendingRemoteOperations();
     remoteLibraryHydrationKey = hydrationKey;
   })()
     .catch((error) => {
@@ -763,6 +864,7 @@ router.get("/diagnostics", async (request, response, next) => {
         activeItemCount: items.filter((item) => !item.isTrashed).length,
         trashedItemCount: items.filter((item) => item.isTrashed).length,
         albumCount: albums.length,
+        pendingRemoteOperationCount: getPendingRemoteOperations().length,
       },
       storage: {
         remoteApplied: Boolean(activeStorage),
@@ -1341,37 +1443,62 @@ router.patch("/library/:itemId/favorite", async (request, response, next) => {
   }
 });
 
-router.patch("/library/:itemId/trash", async (request, response, next) => {
+router.patch("/library/trash", async (request, response, next) => {
   try {
-    const itemId = String(request.params.itemId ?? "");
-    const originalItem = getLibraryItem(itemId);
-
-    if (!originalItem) {
-      response.status(404).json({ error: "Library item not found" });
+    const itemIds = readItemIds(request.body?.itemIds);
+    if (itemIds.length === 0) {
+      response.status(400).json({ error: "itemIds must include at least one item." });
       return;
     }
 
+    let activeStorage = getActiveStorageContext();
     if (!env.mockMode) {
-      const activeStorage = getActiveStorageContext();
       if (!activeStorage) {
         response.status(400).json({ error: "Apply a Discord server in Settings before using the trash." });
         return;
       }
+    }
 
-      const movedRecord = await moveStoredItemToTrash(activeStorage, originalItem);
-      updateLibraryItemStorage(itemId, {
-        guildId: movedRecord.guildId,
-        attachmentUrl: movedRecord.attachmentUrl,
-        storageChannelId: movedRecord.storageChannelId,
-        storageMessageId: movedRecord.storageMessageId,
-      });
+    const items = trashLibraryItems(itemIds);
+    if (items.length === 0) {
+      response.status(404).json({ error: "Library items not found" });
+      return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingMoveItemStorageOperations(
+        items.map((item) => item.id),
+        "trash",
+        activeStorage,
+      );
+      resumePendingRemoteOperations();
+    }
+
+    queueRemoteIndexSync();
+    response.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/library/:itemId/trash", async (request, response, next) => {
+  try {
+    const itemId = String(request.params.itemId ?? "");
+    let activeStorage = getActiveStorageContext();
+    if (!env.mockMode && !activeStorage) {
+      response.status(400).json({ error: "Apply a Discord server in Settings before using the trash." });
+      return;
     }
 
     const item = trashLibraryItem(itemId);
-
     if (!item) {
       response.status(404).json({ error: "Library item not found" });
       return;
+    }
+
+    if (!env.mockMode && activeStorage) {
+      enqueuePendingMoveItemStorageOperations([item.id], "trash", activeStorage);
+      resumePendingRemoteOperations();
     }
 
     queueRemoteIndexSync();

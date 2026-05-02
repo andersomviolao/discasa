@@ -80,6 +80,7 @@ export type AppDiagnostics = {
     activeItemCount: number;
     trashedItemCount: number;
     albumCount: number;
+    pendingRemoteOperationCount: number;
   };
   storage: {
     remoteApplied: boolean;
@@ -378,7 +379,7 @@ function getDuplicateComparisonKey(item: LibraryItem): string | null {
     return `hash:${contentHash}`;
   }
 
-  return `metadata:${item.size}:${item.mimeType}:${item.name.trim().toLowerCase()}`;
+  return null;
 }
 
 export function getDuplicateLibraryItemIds(items: LibraryItem[]): string[] {
@@ -868,6 +869,13 @@ export async function toggleFavorite(itemId: string): Promise<{ item: LibraryIte
 export async function moveToTrash(itemId: string): Promise<{ item: LibraryItem }> {
   return requestJson<{ item: LibraryItem }>(`/api/library/${encodeURIComponent(itemId)}/trash`, {
     method: "PATCH",
+  });
+}
+
+export async function moveItemsToTrash(itemIds: string[]): Promise<{ items: LibraryItem[] }> {
+  return requestJson<{ items: LibraryItem[] }>("/api/library/trash", {
+    method: "PATCH",
+    body: JSON.stringify({ itemIds }),
   });
 }
 

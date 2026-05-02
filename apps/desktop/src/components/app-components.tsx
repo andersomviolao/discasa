@@ -1450,6 +1450,7 @@ type GalleryProps = {
   onOpenMoveItemsModal: () => void;
   onRemoveItemsFromAlbum: (albumId: string, itemIds: string[]) => Promise<void>;
   onMoveToTrash: (itemId: string) => Promise<void>;
+  onMoveItemsToTrash: (itemIds: string[]) => Promise<void>;
   onRestoreFromTrash: (itemId: string) => Promise<void>;
   onDownloadSelected: (items: LibraryItem[]) => Promise<void>;
   onSaveMediaEdit: (itemId: string, input: SaveLibraryItemMediaEditInput) => Promise<LibraryItem>;
@@ -2543,6 +2544,7 @@ export function Gallery({
   onOpenMoveItemsModal,
   onRemoveItemsFromAlbum,
   onMoveToTrash,
+  onMoveItemsToTrash,
   onRestoreFromTrash,
   onDownloadSelected,
   onSaveMediaEdit,
@@ -2689,10 +2691,7 @@ export function Gallery({
     }
 
     const targets = selectedItems.filter((item) => !item.isTrashed);
-
-    for (const item of targets) {
-      await onMoveToTrash(item.id);
-    }
+    await onMoveItemsToTrash(targets.map((item) => item.id));
   }
 
   async function handleBulkRestore(): Promise<void> {

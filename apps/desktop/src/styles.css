@@ -2317,7 +2317,7 @@ img {
   gap: var(--size-12);
   min-height: var(--size-42);
   padding-top: var(--size-10);
-  background: linear-gradient(180deg, transparent 0%, var(--surface-panel) 38%, var(--surface-panel) 100%);
+  background: transparent;
   pointer-events: none;
 }
 

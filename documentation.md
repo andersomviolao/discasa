@@ -377,6 +377,7 @@ The gallery owns Explorer-style file selection behavior:
 - `Ctrl`/`Cmd` click toggles files;
 - `Ctrl+A` selects every visible file unless a modal or text input is active;
 - right-click selects the clicked file when needed and opens a custom Discasa menu.
+- the bottom gallery status area shows total visible files with no selection, item details for one selected file, and selected count plus aggregate size for multi-selection.
 
 Context menus must reflect the selected file state:
 

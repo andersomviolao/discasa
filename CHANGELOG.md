@@ -2,6 +2,13 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-03-gallery-footer-status]
+
+### Changed
+
+- Added a bottom gallery status area that shows total files with no selection, file details for one selected item, and selected count plus total size for multi-selection.
+- Moved the selected-item count out of the top action bar so that bar only contains actions.
+
 ## [2026-05-03-minimal-bot-trash]
 
 ### Changed

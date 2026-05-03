@@ -1245,8 +1245,6 @@ export function BulkActionBar({
 
   return (
     <div className="bulk-action-bar" aria-label={`${selectedCount} item(s) selected`}>
-      <span className="bulk-selection-count">{selectedCount} selected</span>
-
       <button
         type="button"
         className="bulk-action-button"
@@ -1671,6 +1669,22 @@ const SELECTION_DRAG_THRESHOLD = 4;
 const bytesFormatter = new Intl.NumberFormat("en-US");
 const MIN_FREE_PREVIEW_ASPECT_RATIO = 0.82;
 const MAX_FREE_PREVIEW_ASPECT_RATIO = 1.28;
+
+function formatLibraryItemSize(value: number): string {
+  if (value < 1024) {
+    return `${bytesFormatter.format(value)} B`;
+  }
+
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 const previewMediaStyle: CSSProperties = {
   width: "100%",
@@ -2819,6 +2833,36 @@ export function Gallery({
     () => displayItems.filter((item) => selectedItemIdSet.has(item.id)),
     [displayItems, selectedItemIdSet],
   );
+  const footerStatus = useMemo(() => {
+    if (selectedItems.length === 0) {
+      return {
+        label: displayItems.length === 1 ? "1 file" : `${displayItems.length} files`,
+        details: [],
+      };
+    }
+
+    if (selectedItems.length === 1) {
+      const item = selectedItems[0];
+      if (!item) {
+        return {
+          label: "1 selected",
+          details: [],
+        };
+      }
+
+      return {
+        label: item.name,
+        details: [formatLibraryItemSize(item.size), item.mimeType || "Unknown type"],
+      };
+    }
+
+    const selectedSize = selectedItems.reduce((total, item) => total + item.size, 0);
+
+    return {
+      label: `${selectedItems.length} selected`,
+      details: [formatLibraryItemSize(selectedSize)],
+    };
+  }, [displayItems.length, selectedItems]);
 
   const isTrashSelection = selectedItems.length > 0 && selectedItems.every((item) => item.isTrashed);
   const allSelectedAreFavorite = selectedItems.length > 0 && selectedItems.every((item) => item.isFavorite);
@@ -3363,25 +3407,38 @@ export function Gallery({
         onMediaVolumeChange={onMediaPreviewVolumeChange}
       />
 
-      <label
-        className="thumbnail-zoom-control floating"
-        title={`Thumbnail zoom: ${thumbnailZoomPercent}%`}
-        style={{ "--thumbnail-zoom-progress": `${thumbnailZoomProgress}%` } as CSSProperties}
-      >
-        <span className="thumbnail-zoom-icon" aria-hidden="true">
-          <ZoomIcon />
-        </span>
-        <input
-          className="thumbnail-zoom-slider"
-          type="range"
-          min={0}
-          max={thumbnailZoomLevelCount - 1}
-          step={1}
-          value={thumbnailZoomIndex}
-          onChange={handleThumbnailZoomChange}
-          aria-label={`Thumbnail zoom ${thumbnailZoomPercent}%`}
-        />
-      </label>
+      <div className="library-footer-bar" aria-label="Library status">
+        <div className="library-footer-status">
+          <span className="library-footer-status-primary" title={footerStatus.label}>
+            {footerStatus.label}
+          </span>
+          {footerStatus.details.map((detail) => (
+            <span className="library-footer-status-detail" key={detail} title={detail}>
+              {detail}
+            </span>
+          ))}
+        </div>
+
+        <label
+          className="thumbnail-zoom-control footer"
+          title={`Thumbnail zoom: ${thumbnailZoomPercent}%`}
+          style={{ "--thumbnail-zoom-progress": `${thumbnailZoomProgress}%` } as CSSProperties}
+        >
+          <span className="thumbnail-zoom-icon" aria-hidden="true">
+            <ZoomIcon />
+          </span>
+          <input
+            className="thumbnail-zoom-slider"
+            type="range"
+            min={0}
+            max={thumbnailZoomLevelCount - 1}
+            step={1}
+            value={thumbnailZoomIndex}
+            onChange={handleThumbnailZoomChange}
+            aria-label={`Thumbnail zoom ${thumbnailZoomPercent}%`}
+          />
+        </label>
+      </div>
     </main>
   );
 }

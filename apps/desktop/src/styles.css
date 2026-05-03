@@ -871,11 +871,14 @@ img {
 }
 
 .library-header {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
+  min-height: var(--size-30);
   margin-bottom: var(--space-6);
+  padding-right: min(62vw, var(--size-640));
 }
 
 .library-heading {
@@ -2276,26 +2279,35 @@ img {
 }
 
 .library-tools {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--size-8);
   margin-left: auto;
-  flex: 0 0 auto;
+  width: min(62vw, var(--size-640));
   min-width: 0;
+  height: var(--size-30);
+  z-index: 2;
 }
 
 .library-view-controls {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--size-6);
+  width: 100%;
+  min-height: var(--size-30);
   padding: 0;
+  overflow: hidden;
 }
 
 .thumbnail-zoom-control.floating {
   --thumbnail-zoom-progress: 50%;
   position: fixed;
-  left: 50%;
+  right: calc(var(--size-24) + env(safe-area-inset-right));
   bottom: var(--size-24);
   z-index: var(--z-toast);
   display: inline-flex;
@@ -2308,7 +2320,6 @@ img {
   background: var(--surface-toast);
   backdrop-filter: blur(var(--blur-6));
   color: var(--text-primary);
-  transform: translateX(-50%);
   white-space: nowrap;
   user-select: none;
 }
@@ -2342,6 +2353,11 @@ img {
 .gallery-mode-button,
 .upload-button {
   background: var(--white-alpha-06);
+}
+
+.library-view-controls .icon-circle-button {
+  width: var(--size-28);
+  height: var(--size-28);
 }
 
 .gallery-mode-button:hover,
@@ -2729,7 +2745,6 @@ img {
 }
 
 .library-view-controls.has-bulk-actions {
-  flex-wrap: wrap;
   justify-content: flex-end;
 }
 
@@ -2737,16 +2752,18 @@ img {
   display: inline-flex;
   align-items: center;
   gap: var(--size-6);
-  min-height: var(--size-30);
+  min-height: var(--size-28);
   margin-left: 0;
   padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .bulk-selection-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: var(--size-24);
+  min-height: var(--size-28);
   padding: 0 var(--size-8);
   border-radius: var(--radius-pill);
   background: var(--white-alpha-06);
@@ -3327,6 +3344,16 @@ img {
 }
 
 @media (max-width: 980px) {
+  .library-header {
+    padding-right: 0;
+  }
+
+  .library-tools {
+    position: static;
+    width: auto;
+    height: auto;
+  }
+
   .library-view-controls.has-bulk-actions {
     justify-content: flex-start;
   }

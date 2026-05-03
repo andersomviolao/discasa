@@ -17,6 +17,9 @@ All notable changes to **Discasa** are documented in this file.
 
 ### Fixed
 
+- Fixed the selected-file action bar shifting gallery thumbnails downward when it appears.
+- Fixed gallery toolbar action sizes so icon controls, selection count, action buttons, and clear controls use a consistent height.
+- Fixed the floating thumbnail zoom control position so it sits in the lower-right corner on desktop.
 - Fixed thumbnail display mode persistence so square/free-proportion mode survives desktop restarts.
 - Expanded Portuguese translations for recent file, folder, and zoom actions while keeping source strings in English.
 

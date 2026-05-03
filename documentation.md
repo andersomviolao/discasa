@@ -200,6 +200,7 @@ POST   /api/local-paths/inspect
 GET    /api/albums
 POST   /api/albums
 PATCH  /api/albums/:albumId
+PATCH  /api/albums/:albumId/parent
 PUT    /api/albums/reorder
 DELETE /api/albums/:albumId
 PUT    /api/albums/:albumId/items
@@ -293,6 +294,8 @@ UI rules:
 - Folder tiles single-click to select and double-click to open.
 - The toolbar can go up one level and create a folder inside the current album/folder.
 - Dragging files onto a folder or album moves them there.
+- Dragging a folder tile onto a sidebar album or folder target moves that folder under the destination.
+- A folder cannot be moved into itself or into one of its descendants.
 - Current move semantics are exclusive: after moving, an item belongs only to the destination album/folder.
 
 When changing album behavior, check:
@@ -335,6 +338,7 @@ Common library actions update React state before their HTTP request resolves:
 - restore from trash;
 - permanent delete;
 - album/folder rename;
+- nested folder parent move;
 - root album reorder;
 - album/folder delete.
 
@@ -348,6 +352,8 @@ When adding a new optimistic action, capture enough previous state to roll back:
 - pending upload records if pending items are affected.
 
 Trash, restore, and permanent delete have an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord movement or deletion is half-finished.
+
+Gallery display mode is stored both in the synced config and in local desktop storage. The local value is read first so square/free-proportion thumbnail mode survives restarts even before the backend config response finishes. Keep UI strings in English in source and add Portuguese/English translations in `apps/desktop/src/i18n`.
 
 Remote operation types:
 
@@ -465,6 +471,8 @@ Run this checklist for changes touching library behavior:
 - Single-click a folder tile selects it.
 - Double-click a folder tile opens it.
 - Move files between albums and confirm exclusive membership.
+- Drag a nested folder onto another album or folder and confirm the folder moves there.
+- Toggle square/free-proportion thumbnail mode, restart the desktop app, and confirm the selected mode persists.
 - Use `Ctrl+A` in the gallery and confirm all visible files are selected without text selection.
 - Right-click an active file, a trashed file, and a multi-file selection; confirm menus only show valid Discasa actions.
 - Favorite/unfavorite a file.

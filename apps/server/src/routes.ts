@@ -45,6 +45,7 @@ import {
   getPendingRemoteOperations,
   type PendingRemoteOperation,
   type LocalSourceFile,
+  moveAlbumToParent,
   moveLibraryItemsToAlbum,
   renameAlbum,
   reconcilePendingRemoteOperations,
@@ -1165,6 +1166,29 @@ router.patch("/albums/:albumId", async (request, response, next) => {
 
     queueRemoteFolderSync();
     response.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/albums/:albumId/parent", async (request, response, next) => {
+  try {
+    const albumId = String(request.params.albumId ?? "");
+    const parentId = typeof request.body.parentId === "string" && request.body.parentId.length > 0 ? request.body.parentId : null;
+
+    if (!albumId) {
+      response.status(400).json({ error: "albumId is required" });
+      return;
+    }
+
+    const albums = moveAlbumToParent(albumId, parentId);
+    if (!albums) {
+      response.status(404).json({ error: "Album not found or cannot be moved there" });
+      return;
+    }
+
+    queueRemoteFolderSync();
+    response.json({ albums });
   } catch (error) {
     next(error);
   }

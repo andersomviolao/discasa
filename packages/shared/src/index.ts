@@ -82,6 +82,10 @@ export type RenameAlbumInput = {
   name: string;
 };
 
+export type MoveAlbumInput = {
+  parentId: string | null;
+};
+
 export type LibraryItemOriginalSource = {
   attachmentUrl: string;
   storageChannelId?: string;

@@ -80,6 +80,7 @@ npm run build:server
 - Uploading or dropping a folder while an album or folder is open creates a nested folder inside that location. Nested folders are shown in the gallery, not in the sidebar.
 - Folder tiles can be opened from the gallery, and the gallery toolbar includes controls to go up to the parent folder and create a folder in the current album.
 - Folder tiles follow Explorer-style behavior: single click selects the folder and double click opens it.
+- Folder tiles can be dragged onto sidebar albums or other folder targets to move that nested folder.
 - Settings can enable a watched folder, such as a screenshots directory. Discasa periodically imports new stable files from that folder and shows them in the `Watched` collection.
 - Discasa periodically groups duplicate library items in the `Duplicados` collection. The collection appears only while duplicates exist.
 - Moving files between albums is exclusive: files are removed from previous album memberships and kept only in the destination album.
@@ -91,6 +92,8 @@ Discasa applies common library actions optimistically in the desktop interface a
 Bulk trash, restore, and permanent-delete operations are journaled before the UI response. If the app is forced closed while Discord storage is still moving or being deleted, the backend reapplies the local intent and resumes the remote work on the next start.
 
 The gallery supports `Ctrl+A` to select all visible files. File right-click menus are custom Discasa menus, with different actions for active files, trashed files, and multi-file selections.
+
+Thumbnail layout mode is persisted locally, so square and free-proportion viewing survive desktop restarts. The gallery header keeps album and folder titles compact, and zoom lives in the floating bottom control near toast notifications.
 
 Settings are grouped by utility, with storage first, interface controls together, account status, diagnostics, and an About tab with version and repository details.
 

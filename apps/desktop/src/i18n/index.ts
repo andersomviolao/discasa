@@ -42,6 +42,7 @@ const dynamicRules: Record<InterfaceLanguage, DynamicRule[]> = {
     [/^Duração do vídeo (.+)$/u, "Video duration $1"],
     [/^Álbum criado: (.+)$/u, "Album created: $1"],
     [/^Pasta criada: (.+)$/u, "Folder created: $1"],
+    [/^Pasta movida para (.+)\.$/u, "Folder moved to $1."],
     [/^Álbum renomeado para: (.+)$/u, "Album renamed to: $1"],
     [/^Álbum excluído: (.+)$/u, "Album deleted: $1"],
     [/^Álbum movido para cima\.$/u, "Album moved up."],
@@ -56,6 +57,8 @@ const dynamicRules: Record<InterfaceLanguage, DynamicRule[]> = {
     [/^Discasa aplicado a (.+)\.$/u, "Discasa applied to $1."],
     [/^Discasa detectado em (.+)\.$/u, "Discasa detected in $1."],
     [/^(\d+) link\(s\) de arquivo atualizado\(s\)\.$/u, "$1 file link(s) refreshed."],
+    [/^Zoom das miniaturas: (.+)%$/u, "Thumbnail zoom: $1%"],
+    [/^Zoom das miniaturas (.+)%$/u, "Thumbnail zoom $1%"],
   ],
   pt: [
     [/^Connected as (.+)$/u, "Conectado como $1"],
@@ -72,6 +75,7 @@ const dynamicRules: Record<InterfaceLanguage, DynamicRule[]> = {
     [/^Video duration (.+)$/u, "Duração do vídeo $1"],
     [/^Album created: (.+)$/u, "Álbum criado: $1"],
     [/^Folder created: (.+)$/u, "Pasta criada: $1"],
+    [/^Folder moved to (.+)\.$/u, "Pasta movida para $1."],
     [/^Album renamed to: (.+)$/u, "Álbum renomeado para: $1"],
     [/^Album deleted: (.+)$/u, "Álbum excluído: $1"],
     [/^Album moved up\.$/u, "Álbum movido para cima."],
@@ -86,6 +90,8 @@ const dynamicRules: Record<InterfaceLanguage, DynamicRule[]> = {
     [/^Discasa applied to (.+)\.$/u, "Discasa aplicado a $1."],
     [/^Discasa detected in (.+)\.$/u, "Discasa detectado em $1."],
     [/^(\d+) file link\(s\) refreshed\.$/u, "$1 link(s) de arquivo atualizado(s)."],
+    [/^Thumbnail zoom: (.+)%$/u, "Zoom das miniaturas: $1%"],
+    [/^Thumbnail zoom (.+)%$/u, "Zoom das miniaturas $1%"],
   ],
 };
 

@@ -9,6 +9,7 @@ import type {
   GuildSummary,
   LibraryItem,
   LocalStorageStatus,
+  MoveAlbumInput,
   RenameAlbumInput,
   SaveLibraryItemMediaEditInput,
   UploadResponse,
@@ -762,6 +763,13 @@ export async function createAlbum(input: CreateAlbumInput): Promise<{ id: string
 
 export async function renameAlbum(albumId: string, input: RenameAlbumInput): Promise<{ id: string; name: string }> {
   return requestJson<{ id: string; name: string }>(`/api/albums/${encodeURIComponent(albumId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function moveAlbumToParent(albumId: string, input: MoveAlbumInput): Promise<{ albums: AlbumRecord[] }> {
+  return requestJson<{ albums: AlbumRecord[] }>(`/api/albums/${encodeURIComponent(albumId)}/parent`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });

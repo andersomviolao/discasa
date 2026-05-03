@@ -2,6 +2,24 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-03-gallery-mode-folder-move]
+
+### Added
+
+- Added drag-and-drop movement for nested folder tiles onto album and folder targets.
+- Added a backend route for moving an album/folder under another parent while preventing self and descendant moves.
+
+### Changed
+
+- Gallery album and folder headers now show only the title to keep the action row aligned.
+- Thumbnail zoom moved from the top action row to a floating bottom control near toast notifications.
+- The gallery action controls no longer sit inside a larger wrapper pill.
+
+### Fixed
+
+- Fixed thumbnail display mode persistence so square/free-proportion mode survives desktop restarts.
+- Expanded Portuguese translations for recent file, folder, and zoom actions while keeping source strings in English.
+
 ## [2026-05-02-durable-trash-restore-delete]
 
 ### Added

@@ -59,6 +59,7 @@ import {
   initializeDiscasa,
   moveLibraryItemsToAlbum,
   moveItemsToTrash,
+  moveAlbumToParent,
   moveToTrash,
   openDiscordBotInstall,
   openDiscordLogin,
@@ -206,6 +207,15 @@ function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
 }
 
+function readStoredGalleryDisplayMode(fallback: GalleryDisplayMode = DEFAULT_GALLERY_DISPLAY_MODE): GalleryDisplayMode {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  const value = window.localStorage.getItem(GALLERY_DISPLAY_MODE_KEY);
+  return value === "free" || value === "square" ? value : fallback;
+}
+
 function canUseInstantPreview(mimeType: string): boolean {
   return mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/");
 }
@@ -239,6 +249,7 @@ const LIBRARY_CACHE_KEY_PREFIX = "discasa.library.cache";
 const LIBRARY_CACHE_VERSION = 1;
 const PENDING_UPLOAD_QUEUE_KEY = "discasa.upload.pendingQueue.v1";
 const THUMBNAIL_ZOOM_KEY = "discasa.library.thumbnailZoomPercent";
+const GALLERY_DISPLAY_MODE_KEY = "discasa.library.galleryDisplayMode";
 const DEFAULT_ACCENT_HEX = DISCASA_DEFAULT_CONFIG.accentColor;
 const THUMBNAIL_BASE_SIZE = 400;
 const THUMBNAIL_ZOOM_LEVELS = [20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80] as const;
@@ -642,7 +653,7 @@ export function App() {
     const storedPercent = readStoredNumber(THUMBNAIL_ZOOM_KEY, DEFAULT_THUMBNAIL_ZOOM_PERCENT);
     return getClosestThumbnailZoomIndex(storedPercent);
   });
-  const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>(DEFAULT_GALLERY_DISPLAY_MODE);
+  const [galleryDisplayMode, setGalleryDisplayMode] = useState<GalleryDisplayMode>(() => readStoredGalleryDisplayMode());
 
   const dragDepthRef = useRef(0);
   const closeToTrayRef = useRef(closeToTray);
@@ -710,6 +721,7 @@ export function App() {
 
   function recalculateAlbumItemCounts(nextAlbums: AlbumRecord[], nextItems: LibraryItem[]): AlbumRecord[] {
     const countsByAlbumId = new Map<string, number>();
+    const childCountsByAlbumId = new Map<string, number>();
 
     for (const item of nextItems) {
       if (item.isTrashed) {
@@ -721,10 +733,32 @@ export function App() {
       }
     }
 
+    for (const album of nextAlbums) {
+      if (album.parentId) {
+        childCountsByAlbumId.set(album.parentId, (childCountsByAlbumId.get(album.parentId) ?? 0) + 1);
+      }
+    }
+
     return nextAlbums.map((album) => ({
       ...album,
       itemCount: countsByAlbumId.get(album.id) ?? 0,
+      childFolderCount: childCountsByAlbumId.get(album.id) ?? 0,
     }));
+  }
+
+  function isAlbumDescendant(albumId: string, possibleAncestorId: string, albumList = albumsRef.current): boolean {
+    const albumsById = new Map(albumList.map((album) => [album.id, album]));
+    let current = albumsById.get(albumId) ?? null;
+
+    while (current?.parentId) {
+      if (current.parentId === possibleAncestorId) {
+        return true;
+      }
+
+      current = albumsById.get(current.parentId) ?? null;
+    }
+
+    return false;
   }
 
   function clearLibraryDragState(): void {
@@ -1145,7 +1179,7 @@ export function App() {
     setCloseToTray(nextConfig.closeToTray);
     setAccentColor(normalizedAccent);
     setThumbnailZoomIndex(getClosestThumbnailZoomIndex(nextConfig.thumbnailZoomPercent));
-    setGalleryDisplayMode(nextConfig.galleryDisplayMode);
+    setGalleryDisplayMode(readStoredGalleryDisplayMode(nextConfig.galleryDisplayMode));
     setMediaPreviewVolume(clampNumber(nextConfig.mediaPreviewVolume, 0, 1));
     setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
     setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
@@ -1414,7 +1448,10 @@ export function App() {
   );
   const visibleItemIds = useMemo(() => visibleItems.map((item) => item.id), [visibleItems]);
   const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
-  const currentDescription = useMemo(() => getCurrentDescription(selectedView), [selectedView]);
+  const currentDescription = useMemo(
+    () => (selectedView.kind === "album" ? "" : getCurrentDescription(selectedView)),
+    [selectedView],
+  );
   const selectedGuildName = useMemo(
     () => guilds.find((guild) => guild.id === selectedGuildId)?.name ?? null,
     [guilds, selectedGuildId],
@@ -2093,6 +2130,42 @@ export function App() {
     } catch (caughtError) {
       commitAlbumsState(previousAlbums);
       setError(caughtError instanceof Error ? caughtError.message : "Could not move the album.");
+    }
+  }
+
+  async function handleMoveFolderToAlbum(folderId: string, targetParentId: string): Promise<void> {
+    const folder = albumsRef.current.find((album) => album.id === folderId);
+    const targetParent = albumsRef.current.find((album) => album.id === targetParentId);
+    if (!folder || !targetParent || folder.id === targetParent.id || isAlbumDescendant(targetParent.id, folder.id)) {
+      return;
+    }
+
+    if (folder.parentId === targetParent.id) {
+      return;
+    }
+
+    const previousAlbums = albumsRef.current;
+    const timestampAlbums = previousAlbums.map((album) =>
+      album.id === folder.id
+        ? {
+            ...album,
+            type: "folder" as const,
+            parentId: targetParent.id,
+          }
+        : album,
+    );
+    const optimisticAlbums = recalculateAlbumItemCounts(timestampAlbums, itemsRef.current);
+
+    commitAlbumsState(optimisticAlbums);
+    setMessage(`Folder moved to ${targetParent.name}.`);
+    setError("");
+
+    try {
+      const response = await moveAlbumToParent(folder.id, { parentId: targetParent.id });
+      commitAlbumsState(response.albums);
+    } catch (caughtError) {
+      commitAlbumsState(previousAlbums);
+      setError(caughtError instanceof Error ? caughtError.message : "Could not move the folder.");
     }
   }
 
@@ -3168,6 +3241,9 @@ export function App() {
   function handleToggleGalleryDisplayMode(): void {
     setGalleryDisplayMode((current) => {
       const nextMode = current === "free" ? "square" : "free";
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(GALLERY_DISPLAY_MODE_KEY, nextMode);
+      }
       void persistConfigPatch({ galleryDisplayMode: nextMode });
       return nextMode;
     });
@@ -3517,6 +3593,7 @@ export function App() {
 
               void handleAddLibraryItemsToAlbum(albumId, itemIds);
             }}
+            onMoveFolderToAlbum={handleMoveFolderToAlbum}
             onCancelInternalItemDrag={handleLibraryItemDragEnd}
             onToggleFavorite={handleToggleFavorite}
             onOpenMoveItemsModal={openMoveItemsModal}

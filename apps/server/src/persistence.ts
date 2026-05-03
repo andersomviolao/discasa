@@ -1733,6 +1733,20 @@ function getNextFolderPosition(parentId: string | null): number {
   return Math.max(...siblingPositions) + 1;
 }
 
+function isFolderDescendant(folderId: string, possibleAncestorId: string): boolean {
+  let current = database.folders.find((folder) => folder.id === folderId) ?? null;
+
+  while (current?.parentId) {
+    if (current.parentId === possibleAncestorId) {
+      return true;
+    }
+
+    current = database.folders.find((folder) => folder.id === current?.parentId) ?? null;
+  }
+
+  return false;
+}
+
 function sortFolderNodes(left: PersistedFolderNode, right: PersistedFolderNode): number {
   if (left.parentId === right.parentId) {
     return left.position - right.position || left.name.localeCompare(right.name);
@@ -1950,6 +1964,54 @@ export function renameAlbum(albumId: string, name: string): { id: string; name: 
   folder.updatedAt = new Date().toISOString();
   saveDatabase();
   return { id: folder.id, name: folder.name };
+}
+
+export function moveAlbumToParent(albumId: string, parentId: string | null): AlbumRecord[] | null {
+  const folder = database.folders.find((entry) => entry.id === albumId);
+  if (!folder) {
+    return null;
+  }
+
+  const nextParentId = parentId && hasFolder(parentId) ? parentId : null;
+  if (nextParentId === albumId || (nextParentId && isFolderDescendant(nextParentId, albumId))) {
+    return null;
+  }
+
+  if (folder.parentId === nextParentId) {
+    return getAlbums();
+  }
+
+  const previousParentId = folder.parentId;
+  const timestamp = new Date().toISOString();
+  folder.parentId = nextParentId;
+  folder.type = nextParentId ? "folder" : "album";
+  folder.position = getNextFolderPosition(nextParentId);
+  folder.updatedAt = timestamp;
+
+  for (const parent of database.folders) {
+    if (parent.id === previousParentId || parent.id === nextParentId) {
+      parent.updatedAt = timestamp;
+    }
+  }
+
+  const siblingGroups = new Map<string, PersistedFolderNode[]>();
+  for (const entry of database.folders) {
+    const key = entry.parentId ?? "";
+    const siblings = siblingGroups.get(key) ?? [];
+    siblings.push(entry);
+    siblingGroups.set(key, siblings);
+  }
+
+  for (const siblings of siblingGroups.values()) {
+    siblings
+      .sort((left, right) => left.position - right.position)
+      .forEach((sibling, position) => {
+        sibling.position = position;
+      });
+  }
+
+  saveDatabase();
+  return getAlbums();
 }
 
 export function reorderAlbums(orderedIds: string[]): AlbumRecord[] {

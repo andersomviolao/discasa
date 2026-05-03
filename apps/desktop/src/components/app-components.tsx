@@ -1541,6 +1541,7 @@ type GalleryProps = {
   onBeginInternalItemDrag: (itemIds: string[]) => void;
   onMoveInternalItemDrag: (albumId: string | null) => void;
   onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
+  onMoveFolderToAlbum: (folderId: string, albumId: string) => Promise<void>;
   onCancelInternalItemDrag: () => void;
   onToggleFavorite: (itemId: string) => Promise<void>;
   onOpenMoveItemsModal: () => void;
@@ -1560,12 +1561,7 @@ type LibraryToolbarProps = {
   currentAlbumId: string | null;
   parentFolderId: string | null;
   galleryDisplayMode: GalleryDisplayMode;
-  thumbnailZoomIndex: number;
-  thumbnailZoomLevelCount: number;
-  thumbnailZoomPercent: number;
-  thumbnailZoomProgress: number;
   bulkActions?: ReactNode;
-  onThumbnailZoomIndexChange: (nextIndex: number) => void;
   onToggleGalleryDisplayMode: () => void;
   onRequestUpload: () => void;
   onRequestFolderUpload: () => void;
@@ -1607,6 +1603,21 @@ type InternalItemDragPreviewState = {
   clientY: number;
 };
 
+type InternalFolderDragSession = {
+  pointerId: number;
+  folderId: string;
+  startClientX: number;
+  startClientY: number;
+  hasStarted: boolean;
+  hoveredAlbumId: string | null;
+};
+
+type InternalFolderDragPreviewState = {
+  folder: AlbumRecord;
+  clientX: number;
+  clientY: number;
+};
+
 type GalleryGridProps = {
   folders: AlbumRecord[];
   items: LibraryItem[];
@@ -1627,6 +1638,7 @@ type GalleryGridProps = {
   onBeginInternalItemDrag: (itemIds: string[]) => void;
   onMoveInternalItemDrag: (albumId: string | null) => void;
   onCompleteInternalItemDrag: (albumId: string | null, itemIds: string[]) => void;
+  onMoveFolderToAlbum: (folderId: string, albumId: string) => Promise<void>;
   onCancelInternalItemDrag: () => void;
   onRequestUpload: () => void;
   onRequestFolderUpload: () => void;
@@ -1637,6 +1649,7 @@ type GalleryFolderTileProps = {
   isSelected: boolean;
   onSelectFolder: (folderId: string) => void;
   onOpenFolder: (folderId: string) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>, folder: AlbumRecord) => void;
 };
 
 type GalleryItemProps = {
@@ -1841,6 +1854,25 @@ function DragStackPreview({ items, clientX, clientY }: InternalItemDragPreviewSt
   );
 }
 
+function FolderDragPreview({ folder, clientX, clientY }: InternalFolderDragPreviewState) {
+  return (
+    <div
+      className="drag-stack-preview folder-drag-preview"
+      aria-hidden="true"
+      style={{
+        left: `${clientX - 36}px`,
+        top: `${clientY - 36}px`,
+      }}
+    >
+      <div className="drag-stack-preview-tile">
+        <FolderIcon />
+      </div>
+      <span className="drag-stack-preview-count">1</span>
+      <span className="folder-drag-preview-name">{folder.name}</span>
+    </div>
+  );
+}
+
 function formatVideoDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "0:00";
@@ -1900,22 +1932,13 @@ function LibraryToolbar({
   currentAlbumId,
   parentFolderId,
   galleryDisplayMode,
-  thumbnailZoomIndex,
-  thumbnailZoomLevelCount,
-  thumbnailZoomPercent,
-  thumbnailZoomProgress,
   bulkActions,
-  onThumbnailZoomIndexChange,
   onToggleGalleryDisplayMode,
   onRequestUpload,
   onRequestFolderUpload,
   onRequestCreateFolder,
   onGoUpFolder,
 }: LibraryToolbarProps) {
-  function handleThumbnailZoomChange(event: ChangeEvent<HTMLInputElement>): void {
-    onThumbnailZoomIndexChange(Number(event.currentTarget.value));
-  }
-
   const nextModeLabel = galleryDisplayMode === "free" ? "Enable square crop mode" : "Enable free aspect mode";
 
   return (
@@ -1926,26 +1949,6 @@ function LibraryToolbar({
             <ArrowLeftIcon />
           </button>
         ) : null}
-
-        <label
-          className="thumbnail-zoom-control compact"
-          title={`Thumbnail zoom: ${thumbnailZoomPercent}%`}
-          style={{ "--thumbnail-zoom-progress": `${thumbnailZoomProgress}%` } as CSSProperties}
-        >
-          <span className="thumbnail-zoom-icon" aria-hidden="true">
-            <ZoomIcon />
-          </span>
-          <input
-            className="thumbnail-zoom-slider"
-            type="range"
-            min={0}
-            max={thumbnailZoomLevelCount - 1}
-            step={1}
-            value={thumbnailZoomIndex}
-            onChange={handleThumbnailZoomChange}
-            aria-label={`Thumbnail zoom ${thumbnailZoomPercent}%`}
-          />
-        </label>
 
         <button
           type="button"
@@ -2101,7 +2104,7 @@ function FileThumbnail({ item, displayMode, actions }: { item: LibraryItem; disp
   );
 }
 
-function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder }: GalleryFolderTileProps) {
+function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder, onPointerDown }: GalleryFolderTileProps) {
   const childLabel = folder.childFolderCount > 0 ? `, ${folder.childFolderCount} folder${folder.childFolderCount === 1 ? "" : "s"}` : "";
 
   function handleClick(event: ReactMouseEvent<HTMLButtonElement>): void {
@@ -2120,6 +2123,7 @@ function GalleryFolderTile({ folder, isSelected, onSelectFolder, onOpenFolder }:
       data-album-drop-id={folder.id}
       title={folder.name}
       aria-pressed={isSelected}
+      onPointerDown={(event) => onPointerDown(event, folder)}
       onClick={handleClick}
       onDoubleClick={() => onOpenFolder(folder.id)}
     >
@@ -2192,6 +2196,7 @@ function GalleryGrid({
   onBeginInternalItemDrag,
   onMoveInternalItemDrag,
   onCompleteInternalItemDrag,
+  onMoveFolderToAlbum,
   onCancelInternalItemDrag,
   onRequestUpload,
   onRequestFolderUpload: _onRequestFolderUpload,
@@ -2200,9 +2205,11 @@ function GalleryGrid({
   const itemElementMapRef = useRef(new Map<string, HTMLElement>());
   const selectionSessionRef = useRef<SelectionSession | null>(null);
   const internalDragSessionRef = useRef<InternalItemDragSession | null>(null);
+  const internalFolderDragSessionRef = useRef<InternalFolderDragSession | null>(null);
   const suppressNextItemClickRef = useRef(false);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [internalDragPreview, setInternalDragPreview] = useState<InternalItemDragPreviewState | null>(null);
+  const [internalFolderDragPreview, setInternalFolderDragPreview] = useState<InternalFolderDragPreviewState | null>(null);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
 
   const selectedItemIdSet = new Set(selectedItemIds);
@@ -2237,6 +2244,11 @@ function GalleryGrid({
   }
 
   function handleFolderClick(folderId: string): void {
+    if (suppressNextItemClickRef.current) {
+      suppressNextItemClickRef.current = false;
+      return;
+    }
+
     setSelectedFolderId(folderId);
     onClearSelection();
   }
@@ -2293,6 +2305,130 @@ function GalleryGrid({
     }
 
     onCancelInternalItemDrag();
+  }
+
+  function finishInternalFolderDrag(albumId: string | null): void {
+    const session = internalFolderDragSessionRef.current;
+
+    internalFolderDragSessionRef.current = null;
+    setInternalFolderDragPreview(null);
+    onMoveInternalItemDrag(null);
+
+    if (!session) {
+      return;
+    }
+
+    if (session.hasStarted) {
+      suppressNextItemClickRef.current = true;
+      window.setTimeout(() => {
+        suppressNextItemClickRef.current = false;
+      }, 0);
+    }
+
+    if (session.hasStarted && albumId && albumId !== session.folderId) {
+      void onMoveFolderToAlbum(session.folderId, albumId);
+    }
+  }
+
+  function handleFolderPointerDown(event: ReactPointerEvent<HTMLButtonElement>, folder: AlbumRecord): void {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+
+    if (
+      event.button !== 0 ||
+      isBusy ||
+      target?.closest("button, a, input, textarea, select, [data-drag-disabled='true']")
+    ) {
+      return;
+    }
+
+    const sourceElement = event.currentTarget;
+    const pointerId = event.pointerId;
+
+    try {
+      sourceElement.setPointerCapture(pointerId);
+    } catch {}
+
+    internalFolderDragSessionRef.current = {
+      pointerId,
+      folderId: folder.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      hasStarted: false,
+      hoveredAlbumId: null,
+    };
+
+    const cleanupWindowListeners = () => {
+      window.removeEventListener("pointermove", handleWindowPointerMove);
+      window.removeEventListener("pointerup", handleWindowPointerUp);
+      window.removeEventListener("pointercancel", handleWindowPointerCancel);
+
+      try {
+        if (sourceElement.hasPointerCapture(pointerId)) {
+          sourceElement.releasePointerCapture(pointerId);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    const handleWindowPointerMove = (moveEvent: PointerEvent) => {
+      const session = internalFolderDragSessionRef.current;
+      if (!session || moveEvent.pointerId !== session.pointerId) {
+        return;
+      }
+
+      const deltaX = Math.abs(moveEvent.clientX - session.startClientX);
+      const deltaY = Math.abs(moveEvent.clientY - session.startClientY);
+      const hasExceededThreshold = deltaX >= SELECTION_DRAG_THRESHOLD || deltaY >= SELECTION_DRAG_THRESHOLD;
+
+      if (!session.hasStarted && !hasExceededThreshold) {
+        return;
+      }
+
+      moveEvent.preventDefault();
+
+      if (!session.hasStarted) {
+        session.hasStarted = true;
+        suppressNextItemClickRef.current = true;
+        setSelectedFolderId(folder.id);
+        onClearSelection();
+      }
+
+      setInternalFolderDragPreview({
+        folder,
+        clientX: moveEvent.clientX,
+        clientY: moveEvent.clientY,
+      });
+
+      const albumId = findAlbumDropIdAtPoint({ x: moveEvent.clientX, y: moveEvent.clientY });
+      if (session.hoveredAlbumId !== albumId) {
+        session.hoveredAlbumId = albumId;
+        onMoveInternalItemDrag(albumId);
+      }
+    };
+
+    const handleWindowPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
+
+      const albumId = findAlbumDropIdAtPoint({ x: upEvent.clientX, y: upEvent.clientY }) ?? internalFolderDragSessionRef.current?.hoveredAlbumId ?? null;
+      cleanupWindowListeners();
+      finishInternalFolderDrag(albumId);
+    };
+
+    const handleWindowPointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== pointerId) {
+        return;
+      }
+
+      cleanupWindowListeners();
+      finishInternalFolderDrag(null);
+    };
+
+    window.addEventListener("pointermove", handleWindowPointerMove, { passive: false });
+    window.addEventListener("pointerup", handleWindowPointerUp);
+    window.addEventListener("pointercancel", handleWindowPointerCancel);
   }
 
   function handleItemPointerDown(event: ReactPointerEvent<HTMLElement>, item: LibraryItem): void {
@@ -2554,6 +2690,7 @@ function GalleryGrid({
           isSelected={selectedFolderId === folder.id}
           onSelectFolder={handleFolderClick}
           onOpenFolder={handleFolderDoubleClick}
+          onPointerDown={handleFolderPointerDown}
         />
       ))}
 
@@ -2599,6 +2736,7 @@ function GalleryGrid({
       ) : null}
 
       {internalDragPreview ? <DragStackPreview {...internalDragPreview} /> : null}
+      {internalFolderDragPreview ? <FolderDragPreview {...internalFolderDragPreview} /> : null}
     </div>
   );
 }
@@ -2643,6 +2781,7 @@ export function Gallery({
   onBeginInternalItemDrag,
   onMoveInternalItemDrag,
   onCompleteInternalItemDrag,
+  onMoveFolderToAlbum,
   onCancelInternalItemDrag,
   onToggleFavorite,
   onOpenMoveItemsModal,
@@ -3070,6 +3209,9 @@ export function Gallery({
     attachmentWarnings.length > 0
       ? `${attachmentWarnings.length} file link${attachmentWarnings.length === 1 ? "" : "s"} could not be restored from Discord and may appear unavailable.`
       : "";
+  const handleThumbnailZoomChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onThumbnailZoomIndexChange(Number(event.currentTarget.value));
+  };
 
   return (
     <main
@@ -3084,7 +3226,7 @@ export function Gallery({
       <div className="library-header">
         <div className="library-heading">
           <h1>{title}</h1>
-          <p>{description}</p>
+          {description ? <p>{description}</p> : null}
           {unresolvedWarningMessage ? <span className="auth-setup-help error">{unresolvedWarningMessage}</span> : null}
         </div>
 
@@ -3092,12 +3234,7 @@ export function Gallery({
           currentAlbumId={currentAlbumId}
           parentFolderId={parentFolderId}
           galleryDisplayMode={galleryDisplayMode}
-          thumbnailZoomIndex={thumbnailZoomIndex}
-          thumbnailZoomLevelCount={thumbnailZoomLevelCount}
-          thumbnailZoomPercent={thumbnailZoomPercent}
-          thumbnailZoomProgress={thumbnailZoomProgress}
           bulkActions={bulkActions}
-          onThumbnailZoomIndexChange={onThumbnailZoomIndexChange}
           onToggleGalleryDisplayMode={onToggleGalleryDisplayMode}
           onRequestUpload={onRequestUpload}
           onRequestFolderUpload={onRequestFolderUpload}
@@ -3125,6 +3262,7 @@ export function Gallery({
         onBeginInternalItemDrag={onBeginInternalItemDrag}
         onMoveInternalItemDrag={onMoveInternalItemDrag}
         onCompleteInternalItemDrag={onCompleteInternalItemDrag}
+        onMoveFolderToAlbum={onMoveFolderToAlbum}
         onCancelInternalItemDrag={onCancelInternalItemDrag}
         onRequestUpload={onRequestUpload}
         onRequestFolderUpload={onRequestFolderUpload}
@@ -3224,6 +3362,26 @@ export function Gallery({
         }}
         onMediaVolumeChange={onMediaPreviewVolumeChange}
       />
+
+      <label
+        className="thumbnail-zoom-control floating"
+        title={`Thumbnail zoom: ${thumbnailZoomPercent}%`}
+        style={{ "--thumbnail-zoom-progress": `${thumbnailZoomProgress}%` } as CSSProperties}
+      >
+        <span className="thumbnail-zoom-icon" aria-hidden="true">
+          <ZoomIcon />
+        </span>
+        <input
+          className="thumbnail-zoom-slider"
+          type="range"
+          min={0}
+          max={thumbnailZoomLevelCount - 1}
+          step={1}
+          value={thumbnailZoomIndex}
+          onChange={handleThumbnailZoomChange}
+          aria-label={`Thumbnail zoom ${thumbnailZoomPercent}%`}
+        />
+      </label>
     </main>
   );
 }

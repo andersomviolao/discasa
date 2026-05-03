@@ -248,7 +248,7 @@
   --workspace-gap: var(--space-5);
   --workspace-padding-x: var(--space-5);
   --workspace-padding-bottom: var(--space-5);
-  --gallery-footer-safe-area: var(--size-72);
+  --gallery-footer-safe-area: var(--size-78);
   --titlebar-height: var(--size-74);
   --control-size: var(--size-26);
   --control-icon-size: var(--size-12);
@@ -869,19 +869,6 @@ img {
   padding: var(--space-6);
   cursor: default;
   overflow: hidden;
-}
-
-.library-panel::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: var(--gallery-footer-safe-area);
-  z-index: 1;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--surface-panel);
-  pointer-events: none;
 }
 
 .library-header {
@@ -2322,7 +2309,7 @@ img {
   --thumbnail-zoom-progress: 50%;
   position: fixed;
   right: calc(var(--space-6) + var(--size-24) + env(safe-area-inset-right));
-  bottom: calc(var(--workspace-padding-bottom) + var(--size-12));
+  bottom: calc(var(--workspace-padding-bottom) + var(--size-24));
   z-index: var(--z-toast);
   display: inline-flex;
   align-items: center;
@@ -2386,8 +2373,9 @@ img {
   grid-template-columns: repeat(auto-fill, minmax(min(var(--file-card-width), 100%), 1fr));
   gap: var(--size-14);
   align-content: start;
+  margin-bottom: calc(var(--gallery-footer-safe-area) - var(--space-6));
   padding-right: var(--size-2);
-  padding-bottom: calc(var(--gallery-footer-safe-area) + var(--size-14));
+  padding-bottom: var(--size-2);
   user-select: none;
   -webkit-user-select: none;
 }

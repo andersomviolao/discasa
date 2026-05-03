@@ -78,7 +78,6 @@ import {
   chooseWatchedFolder,
   downloadLibraryItems,
   DEFAULT_PROFILE,
-  getCurrentDescription,
   getCurrentTitle,
   getLibraryItemContentUrl,
   getLibraryItemThumbnailUrl,
@@ -1448,10 +1447,7 @@ export function App() {
   );
   const visibleItemIds = useMemo(() => visibleItems.map((item) => item.id), [visibleItems]);
   const currentTitle = useMemo(() => getCurrentTitle(selectedView, albums), [albums, selectedView]);
-  const currentDescription = useMemo(
-    () => (selectedView.kind === "album" ? "" : getCurrentDescription(selectedView)),
-    [selectedView],
-  );
+  const currentDescription = "";
   const selectedGuildName = useMemo(
     () => guilds.find((guild) => guild.id === selectedGuildId)?.name ?? null,
     [guilds, selectedGuildId],

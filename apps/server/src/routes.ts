@@ -1070,7 +1070,7 @@ router.get("/config", async (_request, response, next) => {
 router.patch("/config", async (request, response, next) => {
   try {
     const nextConfig = updateDiscasaConfig(request.body ?? {});
-    queueRemoteConfigSync();
+    await syncRemoteConfigState();
     response.json(nextConfig);
   } catch (error) {
     next(error);

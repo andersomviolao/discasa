@@ -1173,12 +1173,16 @@ export function App() {
 
   function applyRemoteConfig(nextConfig: DiscasaConfig): void {
     const normalizedAccent = normalizeHexColor(nextConfig.accentColor) ?? DEFAULT_ACCENT_HEX;
+    const nextGalleryDisplayMode = nextConfig.galleryDisplayMode === "square" ? "square" : "free";
     setIsSidebarCollapsed(nextConfig.sidebarCollapsed);
     setMinimizeToTray(nextConfig.minimizeToTray);
     setCloseToTray(nextConfig.closeToTray);
     setAccentColor(normalizedAccent);
     setThumbnailZoomIndex(getClosestThumbnailZoomIndex(nextConfig.thumbnailZoomPercent));
-    setGalleryDisplayMode(readStoredGalleryDisplayMode(nextConfig.galleryDisplayMode));
+    setGalleryDisplayMode(nextGalleryDisplayMode);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(GALLERY_DISPLAY_MODE_KEY, nextGalleryDisplayMode);
+    }
     setMediaPreviewVolume(clampNumber(nextConfig.mediaPreviewVolume, 0, 1));
     setLocalMirrorEnabled(nextConfig.localMirrorEnabled);
     setLocalMirrorPath(nextConfig.localMirrorPath ?? "");
@@ -1255,7 +1259,7 @@ export function App() {
     }
   }
 
-  function persistConfigPatch(patch: Partial<DiscasaConfig>): void {
+  function persistConfigPatch(patch: Partial<DiscasaConfig>, options?: { immediate?: boolean }): void {
     if (!activeGuildIdRef.current) {
       return;
     }
@@ -1264,6 +1268,16 @@ export function App() {
       ...(pendingConfigPatchRef.current ?? {}),
       ...patch,
     };
+
+    if (options?.immediate) {
+      if (configSaveTimerRef.current !== null) {
+        window.clearTimeout(configSaveTimerRef.current);
+        configSaveTimerRef.current = null;
+      }
+
+      void flushConfigPatch();
+      return;
+    }
 
     scheduleConfigSave();
   }
@@ -3240,7 +3254,7 @@ export function App() {
       if (typeof window !== "undefined") {
         window.localStorage.setItem(GALLERY_DISPLAY_MODE_KEY, nextMode);
       }
-      void persistConfigPatch({ galleryDisplayMode: nextMode });
+      void persistConfigPatch({ galleryDisplayMode: nextMode }, { immediate: true });
       return nextMode;
     });
   }

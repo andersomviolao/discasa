@@ -21,6 +21,8 @@ All notable changes to **Discasa** are documented in this file.
 - Fixed gallery toolbar action sizes so icon controls, selection count, action buttons, and clear controls use a consistent height.
 - Fixed the floating thumbnail zoom control position so it sits in the lower-right corner on desktop.
 - Removed gallery header descriptions from built-in collections so only the current view name is shown.
+- Fixed gallery display mode hydration so the saved Discord config is the source of truth and stale local cache cannot override it.
+- Fixed gallery display mode saves so the config patch is sent immediately and the backend syncs the config snapshot to Discord before responding.
 - Fixed thumbnail display mode persistence so square/free-proportion mode survives desktop restarts.
 - Expanded Portuguese translations for recent file, folder, and zoom actions while keeping source strings in English.
 

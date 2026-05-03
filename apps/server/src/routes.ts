@@ -30,12 +30,10 @@ import {
   deleteLibraryItems,
   completePendingRemoteOperation,
   enqueuePendingDeleteItemStorageOperations,
-  enqueuePendingMoveItemStorageOperations,
   failPendingRemoteOperation,
   getActiveStorageContext,
   getAlbums,
   getDiscasaConfig,
-  getLocalSourceFileForLibraryItem,
   getLibraryItemContentSource,
   getLibraryItemThumbnailSource,
   getLibraryItem,
@@ -67,7 +65,6 @@ import {
   trashLibraryItem,
   trashLibraryItems,
   updateDiscasaConfig,
-  updateLibraryItemStorage,
 } from "./persistence";
 import {
   deleteStoredItemFromDiscord,
@@ -78,12 +75,10 @@ import {
   hasCurrentIndexSnapshot,
   initializeDiscasaInGuild,
   inspectDiscasaSetup,
-  moveStoredItemToTrash,
   readLatestConfigSnapshot,
   readLatestFolderSnapshot,
   readLatestIndexSnapshot,
   refreshIndexSnapshotAttachmentUrls,
-  restoreStoredItemFromTrash,
   scanDiscordDriveForNewFiles,
   syncConfigSnapshot,
   syncFolderSnapshot,
@@ -100,6 +95,7 @@ const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });
 let remoteLibraryHydrationKey: string | null = null;
 let remoteLibraryHydrationPromise: Promise<void> | null = null;
+const REMOTE_SYNC_DEBOUNCE_MS = 750;
 const BOT_INVITE_PERMISSIONS =
   0x400n + // View Channel
   0x800n + // Send Messages
@@ -338,34 +334,66 @@ async function syncRemoteLibraryState(): Promise<void> {
   await Promise.all([syncRemoteIndexState(), syncRemoteFolderState()]);
 }
 
-const remoteSyncQueues = new Map<string, { running: boolean; pending: boolean }>();
+const remoteSyncQueues = new Map<
+  string,
+  {
+    running: boolean;
+    pending: boolean;
+    timer: ReturnType<typeof setTimeout> | null;
+    task: () => Promise<void>;
+  }
+>();
 
 function queueRemoteSync(label: string, task: () => Promise<void>): void {
-  const queue = remoteSyncQueues.get(label) ?? { running: false, pending: false };
+  const queue = remoteSyncQueues.get(label) ?? {
+    running: false,
+    pending: false,
+    timer: null,
+    task,
+  };
+  queue.task = task;
   remoteSyncQueues.set(label, queue);
+
+  const startRun = () => {
+    if (queue.running) {
+      queue.pending = true;
+      return;
+    }
+
+    queue.running = true;
+
+    const run = async () => {
+      do {
+        queue.pending = false;
+
+        try {
+          await queue.task();
+        } catch (error) {
+          logger.warn(`[Discasa sync] Background ${label} sync failed.`, error);
+        }
+      } while (queue.pending);
+
+      queue.running = false;
+    };
+
+    void run();
+  };
 
   if (queue.running) {
     queue.pending = true;
     return;
   }
 
-  queue.running = true;
+  queue.pending = true;
 
-  const run = async () => {
-    do {
-      queue.pending = false;
+  if (queue.timer) {
+    return;
+  }
 
-      try {
-        await task();
-      } catch (error) {
-        logger.warn(`[Discasa sync] Background ${label} sync failed.`, error);
-      }
-    } while (queue.pending);
-
-    queue.running = false;
-  };
-
-  void run();
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    startRun();
+  }, REMOTE_SYNC_DEBOUNCE_MS);
 }
 
 function queueRemoteIndexSync(): void {
@@ -418,33 +446,9 @@ async function processPendingRemoteOperation(operation: PendingRemoteOperation):
     return;
   }
 
-  const item = getLibraryItem(currentOperation.itemId);
-  if (!item) {
-    completePendingRemoteOperation(currentOperation.id);
-    return;
-  }
-
-  if (
-    (currentOperation.target === "trash" && !item.isTrashed) ||
-    (currentOperation.target === "drive" && item.isTrashed)
-  ) {
-    completePendingRemoteOperation(currentOperation.id);
-    return;
-  }
-
-  const localFile = getLocalSourceFileForLibraryItem(item.id);
-  const movedRecord =
-    currentOperation.target === "trash"
-      ? await moveStoredItemToTrash(currentOperation.context, item, { localFile })
-      : await restoreStoredItemFromTrash(currentOperation.context, item, { localFile });
-
-  updateLibraryItemStorage(item.id, {
-    guildId: movedRecord.guildId,
-    attachmentUrl: movedRecord.attachmentUrl,
-    storageChannelId: movedRecord.storageChannelId,
-    storageMessageId: movedRecord.storageMessageId,
-    storageManifest: movedRecord.storageManifest,
-  });
+  // Older builds queued storage moves for trash/restore. The current model keeps
+  // trash as app-owned index state, so the bot is not asked to reupload/delete
+  // Discord messages until a permanent delete is requested.
   completePendingRemoteOperation(currentOperation.id);
   queueRemoteIndexSync();
 }
@@ -616,8 +620,21 @@ async function importNewWatchedFolderFiles(options: { syncRemote?: boolean } = {
   };
 }
 
-async function importExternalLibraryFiles(options: { syncRemote?: boolean } = {}): Promise<DiscasaExternalImportResult> {
-  const discordDrive = await importNewDiscordDriveFiles({ syncRemote: false });
+function createEmptyDiscordDriveImportResult(): DiscasaDriveImportResult {
+  return {
+    imported: [],
+    scannedAttachmentCount: 0,
+    skippedAttachmentCount: 0,
+    skippedGroupedMessageCount: 0,
+  };
+}
+
+async function importExternalLibraryFiles(
+  options: { syncRemote?: boolean; includeDiscordDrive?: boolean } = {},
+): Promise<DiscasaExternalImportResult> {
+  const discordDrive = options.includeDiscordDrive === false
+    ? createEmptyDiscordDriveImportResult()
+    : await importNewDiscordDriveFiles({ syncRemote: false });
   const localMirror = await importNewLocalMirrorFiles({ syncRemote: false });
   const watchedFolder = await importNewWatchedFolderFiles({ syncRemote: false });
   const imported = [...discordDrive.imported, ...localMirror.imported, ...watchedFolder.imported];
@@ -676,7 +693,7 @@ async function hydrateRemoteLibraryState(options: { importExternalFiles?: boolea
 
     if (options.importExternalFiles !== false) {
       try {
-        const importResult = await importExternalLibraryFiles();
+        const importResult = await importExternalLibraryFiles({ includeDiscordDrive: false });
         if (importResult.imported.length > 0) {
           console.info(`[Discasa import] Imported ${importResult.imported.length} external file(s).`);
         }
@@ -994,7 +1011,7 @@ router.post("/discasa/initialize", async (request, response, next) => {
       resetDiscasaConfig();
     }
 
-    const externalImport = await importExternalLibraryFiles({ syncRemote: false });
+    const externalImport = await importExternalLibraryFiles({ syncRemote: false, includeDiscordDrive: false });
     if (externalImport.imported.length > 0) {
       indexDidChange = true;
     }
@@ -1334,8 +1351,10 @@ router.post("/library/import-external-files", async (_request, response, next) =
       return;
     }
 
+    const includeDiscordDrive = _request.body?.includeDiscordDrive !== false;
+
     await hydrateRemoteLibraryState({ importExternalFiles: false });
-    response.json(await importExternalLibraryFiles());
+    response.json(await importExternalLibraryFiles({ includeDiscordDrive }));
   } catch (error) {
     next(error);
   }
@@ -1501,15 +1520,6 @@ router.patch("/library/trash", async (request, response, next) => {
       return;
     }
 
-    if (!env.mockMode && activeStorage) {
-      enqueuePendingMoveItemStorageOperations(
-        items.map((item) => item.id),
-        "trash",
-        activeStorage,
-      );
-      resumePendingRemoteOperations();
-    }
-
     queueRemoteIndexSync();
     response.json({ items });
   } catch (error) {
@@ -1532,11 +1542,6 @@ router.patch("/library/:itemId/trash", async (request, response, next) => {
       return;
     }
 
-    if (!env.mockMode && activeStorage) {
-      enqueuePendingMoveItemStorageOperations([item.id], "trash", activeStorage);
-      resumePendingRemoteOperations();
-    }
-
     queueRemoteIndexSync();
     response.json({ item });
   } catch (error) {
@@ -1552,7 +1557,7 @@ router.patch("/library/restore", async (request, response, next) => {
       return;
     }
 
-    let activeStorage = getActiveStorageContext();
+    const activeStorage = getActiveStorageContext();
     if (!env.mockMode && !activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
       return;
@@ -1562,15 +1567,6 @@ router.patch("/library/restore", async (request, response, next) => {
     if (items.length === 0) {
       response.status(404).json({ error: "Library items not found" });
       return;
-    }
-
-    if (!env.mockMode && activeStorage) {
-      enqueuePendingMoveItemStorageOperations(
-        items.map((item) => item.id),
-        "drive",
-        activeStorage,
-      );
-      resumePendingRemoteOperations();
     }
 
     queueRemoteIndexSync();
@@ -1583,7 +1579,7 @@ router.patch("/library/restore", async (request, response, next) => {
 router.patch("/library/:itemId/restore", async (request, response, next) => {
   try {
     const itemId = String(request.params.itemId ?? "");
-    let activeStorage = getActiveStorageContext();
+    const activeStorage = getActiveStorageContext();
     if (!env.mockMode && !activeStorage) {
       response.status(400).json({ error: "Apply a Discord server in Settings before restoring files." });
       return;
@@ -1593,11 +1589,6 @@ router.patch("/library/:itemId/restore", async (request, response, next) => {
     if (!item) {
       response.status(404).json({ error: "Library item not found" });
       return;
-    }
-
-    if (!env.mockMode && activeStorage) {
-      enqueuePendingMoveItemStorageOperations([item.id], "drive", activeStorage);
-      resumePendingRemoteOperations();
     }
 
     queueRemoteIndexSync();

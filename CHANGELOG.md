@@ -2,6 +2,19 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-03-minimal-bot-trash]
+
+### Changed
+
+- Changed trash and restore to app-owned logical index state instead of physically copying Discord attachments between drive and trash channels.
+- Debounced background snapshot sync so rapid local actions coalesce into fewer Discord snapshot writes.
+- Throttled automatic `discasa-drive` history scans separately from local watched-folder and mirror imports.
+- Limited attachment recovery during hydration to missing or incomplete storage references instead of resolving every healthy item.
+
+### Fixed
+
+- Prevented legacy pending trash/restore storage moves from reuploading/deleting Discord messages after upgrading.
+
 ## [2026-05-03-gallery-mode-folder-move]
 
 ### Added

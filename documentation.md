@@ -123,6 +123,7 @@ Keep these responsibilities in this repository:
 - Folder upload expansion, watched-folder scans, local mirror behavior.
 - Chunking decisions, pending upload previews, interrupted upload recovery.
 - Snapshot contents and reconciliation rules.
+- Decisions about when Discord scans or attachment recovery are necessary.
 - Optimistic UI and rollback behavior.
 
 Keep these responsibilities in `Discasa_bot`:
@@ -166,17 +167,22 @@ Discasa
 
 - `discasa-drive`: active file attachments and chunk parts.
 - `discasa-index`: index, folder, config, and installation snapshots.
-- `discasa-trash`: storage for files moved to trash.
+- `discasa-trash`: retained for compatibility with older installations and any legacy storage already there. Current trash/restore behavior is logical index state and does not physically move attachments into this channel.
 
 The app treats Discord snapshots as durable remote state. The local backend persists local state first, then syncs snapshots through the bot. The bot stores the JSON it receives; it should not reinterpret product meaning.
 
-Trash, restore, and permanent-delete storage work is split into two phases:
+The storage model follows a minimal-bot boundary:
 
-1. The backend applies the local item state and records a pending remote operation before responding to the UI.
-2. A background worker moves the Discord attachment or chunk manifest between `discasa-drive` and `discasa-trash`, or deletes the Discord storage messages for permanent delete.
-3. The worker updates storage pointers when needed, clears the pending operation, and syncs the index/folder snapshots.
+- Trash and restore only flip `isTrashed` in the app-owned index snapshot.
+- Permanent delete is the only library-state action that deletes Discord storage messages.
+- Uploads still require the bot because the Discord bot token must remain outside the desktop app.
+- Snapshot reads/writes still go through the bot because snapshots are stored as Discord attachments.
 
-This keeps large batch actions fast in the UI while preserving recovery after a forced shutdown. If a stored Discord attachment URL has expired, the worker can reupload from the local mirror or thumbnail cache when a size-matched local file exists.
+This keeps large batch actions fast in the UI and prevents a normal trash/restore action from causing Discord reupload/delete work. Legacy `move-item-storage` journal entries are completed without moving Discord storage; they exist only so older local databases can be drained safely after upgrade.
+
+Expensive recovery work is selective. Hydration only asks the bot to resolve attachment references that are already marked missing or lack complete storage metadata. Healthy items are trusted from the snapshot instead of being revalidated one by one on every start.
+
+Automatic external imports are split by cost. Watched-folder and local-mirror scans can run on the short desktop polling loop because they are local. Full `discasa-drive` history scans require the bot to page through Discord messages, so the desktop throttles them separately and skips them during normal hydration.
 
 ## 9. Local Backend API
 
@@ -235,7 +241,7 @@ Action routes persist local state before responding. For common action routes, D
 - `PATCH /api/library/restore` accepts `{ "itemIds": string[] }` and restores items locally.
 - `DELETE /api/library` accepts `{ "itemIds": string[] }` and permanently removes items locally.
 
-All three routes enqueue resumable Discord storage operations when live Discord storage is active.
+Trash and restore queue only snapshot sync. Permanent delete also enqueues a resumable Discord storage deletion when live Discord storage is active.
 
 ## 10. Upload Flow
 
@@ -351,14 +357,13 @@ When adding a new optimistic action, capture enough previous state to roll back:
 - selected view and selected ids if navigation changes;
 - pending upload records if pending items are affected.
 
-Trash, restore, and permanent delete have an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord movement or deletion is half-finished.
+Permanent delete has an additional durability rule. The backend persists a `pendingRemoteOperations` journal entry for each item before responding. On startup and after remote hydration, the server reapplies pending local intent and resumes the worker. This prevents a forced app close from reverting the UI while Discord deletion is half-finished.
 
 Gallery display mode is stored both in the synced config and in local desktop storage. The local value is read first so square/free-proportion thumbnail mode survives restarts even before the backend config response finishes. Keep UI strings in English in source and add Portuguese/English translations in `apps/desktop/src/i18n`.
 
 Remote operation types:
 
-- `move-item-storage` with target `trash`: move active Discord storage to `discasa-trash`.
-- `move-item-storage` with target `drive`: restore trashed Discord storage to `discasa-drive`.
+- `move-item-storage` with target `trash` or `drive`: legacy compatibility only. The worker completes these entries without Discord movement because current trash/restore is logical index state.
 - `delete-item-storage`: delete the stored Discord message or chunk messages after the item has already disappeared from the UI.
 
 The delete operation stores an item snapshot in the journal because the normal item record is removed immediately from the database. Keep that snapshot schema compatible with `LibraryItemIndex` if storage fields change.

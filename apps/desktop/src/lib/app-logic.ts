@@ -869,9 +869,12 @@ export async function inspectLocalFilePaths(filePaths: string[]): Promise<LocalP
   return result.paths;
 }
 
-export async function importExternalLibraryFiles(): Promise<DiscasaExternalImportResult> {
+export async function importExternalLibraryFiles(
+  options: { includeDiscordDrive?: boolean } = {},
+): Promise<DiscasaExternalImportResult> {
   return requestJson<DiscasaExternalImportResult>("/api/library/import-external-files", {
     method: "POST",
+    body: JSON.stringify(options),
   });
 }
 

@@ -117,10 +117,6 @@ export type LocalUploadableFile = {
   modifiedAt: string;
 };
 
-type MoveStoredItemOptions = {
-  localFile?: LocalUploadableFile | null;
-};
-
 const CHUNK_UPLOAD_SAFETY_BYTES = 512 * 1024;
 const MIN_CHUNK_SIZE_BYTES = 1024 * 1024;
 const INDEX_SNAPSHOT_FILENAME = "discasa-index.snapshot.json";
@@ -221,15 +217,6 @@ function toUploadableFile(file: Express.Multer.File): UploadableFile {
     buffer: Buffer.from(file.buffer),
     size: file.size,
   };
-}
-
-async function downloadAttachmentBuffer(attachmentUrl: string): Promise<Buffer> {
-  const response = await fetch(attachmentUrl);
-  if (!response.ok) {
-    throw new Error("Failed to download the stored Discord attachment.");
-  }
-
-  return Buffer.from(await response.arrayBuffer());
 }
 
 export async function getDiscasaBotStatus(): Promise<DiscasaBotStatus> {
@@ -870,6 +857,20 @@ function didAttachmentPointerChange(item: LibraryItemIndex, resolved: Attachment
   );
 }
 
+function hasCompleteAttachmentPointer(item: LibraryItemIndex): boolean {
+  if (hasChunkedStorage(item)) {
+    return item.storageManifest.parts.every((part) =>
+      Boolean(part.attachmentUrl && part.storageChannelId && part.storageMessageId),
+    );
+  }
+
+  return Boolean(item.attachmentUrl && item.storageChannelId && item.storageMessageId);
+}
+
+function shouldRefreshAttachmentPointer(item: LibraryItemIndex): boolean {
+  return item.attachmentStatus === "missing" || !hasCompleteAttachmentPointer(item);
+}
+
 export async function refreshIndexSnapshotAttachmentUrls(
   context: ActiveStorageContext,
   snapshot: PersistedIndexSnapshot,
@@ -885,11 +886,18 @@ export async function refreshIndexSnapshotAttachmentUrls(
 
   const nextItems: LibraryItemIndex[] = [];
   const unresolvedItems: DiscasaAttachmentRecoveryWarning[] = [];
-  const checkedItemCount = snapshot.items.length;
+  const totalItemCount = snapshot.items.length;
+  let checkedItemCount = 0;
   let relinkedItemCount = 0;
   let didChange = false;
 
   for (const item of snapshot.items) {
+    if (!shouldRefreshAttachmentPointer(item)) {
+      nextItems.push(item);
+      continue;
+    }
+
+    checkedItemCount += 1;
     const resolution = await resolveCurrentAttachment(context, item);
 
     if ("reason" in resolution) {
@@ -933,10 +941,11 @@ export async function refreshIndexSnapshotAttachmentUrls(
     nextItems.push(nextItem);
   }
 
+  const skippedHealthyItemCount = totalItemCount - checkedItemCount;
   const alreadyValidItemCount = checkedItemCount - relinkedItemCount - unresolvedItems.length;
 
   console.info(
-    `[Discasa recovery] Summary | Checked: ${checkedItemCount} | Relinked: ${relinkedItemCount} | Already valid: ${alreadyValidItemCount} | Unresolved: ${unresolvedItems.length}`,
+    `[Discasa recovery] Summary | Items: ${totalItemCount} | Checked: ${checkedItemCount} | Skipped healthy: ${skippedHealthyItemCount} | Relinked: ${relinkedItemCount} | Already valid: ${alreadyValidItemCount} | Unresolved: ${unresolvedItems.length}`,
   );
 
   return {
@@ -1024,216 +1033,6 @@ function getSingleStorageMessage(item: LibraryItem): { channelId: string; messag
     channelId: item.storageChannelId,
     messageId: item.storageMessageId,
   };
-}
-
-function createRecordFromChunkedManifest(
-  item: Pick<LibraryItem, "name" | "size" | "mimeType">,
-  guildId: string,
-  storageManifest: LibraryItemStorageManifest,
-): UploadedFileRecord {
-  const firstPart = storageManifest.parts[0];
-  if (!firstPart) {
-    throw new Error(`Chunked storage manifest for "${item.name}" has no parts.`);
-  }
-
-  return {
-    fileName: item.name,
-    fileSize: item.size,
-    mimeType: item.mimeType,
-    guildId,
-    attachmentUrl: firstPart.attachmentUrl,
-    storageChannelId: firstPart.storageChannelId,
-    storageMessageId: firstPart.storageMessageId,
-    storageManifest,
-  };
-}
-
-async function uploadLocalFallbackToChannel(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  targetChannelId: string,
-  localFile?: LocalUploadableFile | null,
-): Promise<UploadedFileRecord | null> {
-  if (!localFile || localFile.fileSize !== item.size) {
-    return null;
-  }
-
-  const moved = await uploadLocalFileToDiscordChannel(
-    {
-      ...localFile,
-      fileName: item.name,
-      mimeType: item.mimeType || localFile.mimeType || "application/octet-stream",
-    },
-    context,
-    targetChannelId,
-  );
-
-  return {
-    ...moved,
-    fileSize: item.size,
-    mimeType: item.mimeType || moved.mimeType,
-  };
-}
-
-async function moveSingleStoredItemToChannel(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  targetChannelId: string,
-  options: MoveStoredItemOptions = {},
-): Promise<UploadedFileRecord> {
-  if (item.storageChannelId === targetChannelId && item.storageMessageId) {
-    return {
-      fileName: item.name,
-      fileSize: item.size,
-      mimeType: item.mimeType,
-      guildId: context.guildId,
-      attachmentUrl: item.attachmentUrl,
-      storageChannelId: item.storageChannelId,
-      storageMessageId: item.storageMessageId,
-      storageManifest: null,
-    };
-  }
-
-  let buffer: Buffer;
-  try {
-    buffer = await downloadAttachmentBuffer(item.attachmentUrl);
-  } catch (error) {
-    const fallback = await uploadLocalFallbackToChannel(context, item, targetChannelId, options.localFile);
-    if (!fallback) {
-      throw error;
-    }
-
-    const oldMessage = getSingleStorageMessage(item);
-    if (oldMessage) {
-      await deleteStorageMessages(context, [oldMessage]);
-    }
-
-    return fallback;
-  }
-
-  const moved = await uploadSingleFileToDiscordChannel(
-    {
-      originalname: item.name,
-      mimetype: item.mimeType || "application/octet-stream",
-      buffer,
-      size: item.size,
-    },
-    context,
-    targetChannelId,
-  );
-  const oldMessage = getSingleStorageMessage(item);
-  if (oldMessage) {
-    await deleteStorageMessages(context, [oldMessage]);
-  }
-
-  return {
-    ...moved,
-    fileSize: item.size,
-    storageManifest: null,
-  };
-}
-
-async function moveChunkedStoredItemToChannel(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  targetChannelId: string,
-  options: MoveStoredItemOptions = {},
-): Promise<UploadedFileRecord> {
-  if (!hasChunkedStorage(item)) {
-    throw new Error(`"${item.name}" is not stored as a chunked file.`);
-  }
-
-  if (item.storageManifest.parts.every((part) => part.storageChannelId === targetChannelId)) {
-    return createRecordFromChunkedManifest(item, context.guildId, item.storageManifest);
-  }
-
-  const nextParts: LibraryItemStoragePart[] = [];
-
-  try {
-    for (const part of item.storageManifest.parts) {
-      const buffer = await downloadAttachmentBuffer(part.attachmentUrl);
-      if (buffer.byteLength !== part.size || hashBuffer(buffer) !== part.sha256) {
-        throw new Error(`Chunk ${part.index + 1} for "${item.name}" failed integrity validation.`);
-      }
-
-      const uploadedPart = await uploadSingleFileToDiscordChannel(
-        {
-          originalname: part.fileName,
-          mimetype: "application/octet-stream",
-          buffer,
-          size: part.size,
-        },
-        context,
-        targetChannelId,
-      );
-
-      if (!uploadedPart.storageChannelId || !uploadedPart.storageMessageId) {
-        throw new Error(`Discord did not return storage metadata for ${part.fileName}.`);
-      }
-
-      nextParts.push({
-        ...part,
-        attachmentUrl: uploadedPart.attachmentUrl,
-        storageChannelId: uploadedPart.storageChannelId,
-        storageMessageId: uploadedPart.storageMessageId,
-      });
-    }
-  } catch (error) {
-    const fallback = await uploadLocalFallbackToChannel(context, item, targetChannelId, options.localFile);
-    if (!fallback) {
-      throw error;
-    }
-
-    await deleteStorageMessages(
-      context,
-      item.storageManifest.parts.map((part) => ({
-        channelId: part.storageChannelId,
-        messageId: part.storageMessageId,
-      })),
-    );
-
-    return fallback;
-  }
-
-  await deleteStorageMessages(
-    context,
-    item.storageManifest.parts.map((part) => ({
-      channelId: part.storageChannelId,
-      messageId: part.storageMessageId,
-    })),
-  );
-
-  return createRecordFromChunkedManifest(item, context.guildId, {
-    ...item.storageManifest,
-    parts: nextParts,
-  });
-}
-
-async function moveStoredItemToChannel(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  targetChannelId: string,
-  options: MoveStoredItemOptions = {},
-): Promise<UploadedFileRecord> {
-  return hasChunkedStorage(item)
-    ? moveChunkedStoredItemToChannel(context, item, targetChannelId, options)
-    : moveSingleStoredItemToChannel(context, item, targetChannelId, options);
-}
-
-export async function moveStoredItemToTrash(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  options: MoveStoredItemOptions = {},
-): Promise<UploadedFileRecord> {
-  return moveStoredItemToChannel(context, item, context.trashChannelId, options);
-}
-
-export async function restoreStoredItemFromTrash(
-  context: ActiveStorageContext,
-  item: LibraryItem,
-  options: MoveStoredItemOptions = {},
-): Promise<UploadedFileRecord> {
-  return moveStoredItemToChannel(context, item, context.driveChannelId, options);
 }
 
 export async function deleteStoredItemFromDiscord(

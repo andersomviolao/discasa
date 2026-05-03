@@ -256,6 +256,7 @@ const DEFAULT_THUMBNAIL_ZOOM_PERCENT = DISCASA_DEFAULT_CONFIG.thumbnailZoomPerce
 const DEFAULT_GALLERY_DISPLAY_MODE = DISCASA_DEFAULT_CONFIG.galleryDisplayMode;
 const CONFIG_SAVE_DEBOUNCE_MS = 700;
 const DRIVE_IMPORT_INTERVAL_MS = 30000;
+const DISCORD_DRIVE_IMPORT_INTERVAL_MS = 10 * 60 * 1000;
 const DUPLICATE_SCAN_INTERVAL_MS = 300000;
 const DISCASA_LIBRARY_ITEM_DRAG_MIME = "application/x-discasa-library-items";
 const DISCASA_LIBRARY_ITEM_DRAG_TEXT_PREFIX = "discasa-library-items:";
@@ -668,6 +669,7 @@ export function App() {
   const nativeDropAlbumIdRef = useRef<string | null>(null);
   const activeGuildIdRef = useRef(activeGuildId);
   const isExternalImportInFlightRef = useRef(false);
+  const lastDiscordDriveImportAtRef = useRef(Date.now());
   const libraryCacheGuildIdRef = useRef(initialCachedLibrary ? initialActiveGuildId : "");
   const hasHydratedLibraryCacheRef = useRef(Boolean(initialCachedLibrary));
   const pendingConfigPatchRef = useRef<Partial<DiscasaConfig> | null>(null);
@@ -826,6 +828,7 @@ export function App() {
 
   useEffect(() => {
     activeGuildIdRef.current = activeGuildId;
+    lastDiscordDriveImportAtRef.current = Date.now();
   }, [activeGuildId]);
 
   useEffect(() => {
@@ -2659,7 +2662,13 @@ export function App() {
     isExternalImportInFlightRef.current = true;
 
     try {
-      const result = await importExternalLibraryFiles();
+      const now = Date.now();
+      const includeDiscordDrive = now - lastDiscordDriveImportAtRef.current >= DISCORD_DRIVE_IMPORT_INTERVAL_MS;
+      const result = await importExternalLibraryFiles({ includeDiscordDrive });
+      if (includeDiscordDrive) {
+        lastDiscordDriveImportAtRef.current = now;
+      }
+
       const importedCount = result.imported.length;
 
       if (importedCount === 0) {

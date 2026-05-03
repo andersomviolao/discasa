@@ -264,7 +264,7 @@ const AUTH_APPLY_PROGRESS_STEP_MS = 1700;
 const AUTH_APPLY_PROGRESS_STEPS = [
   {
     title: "Preparing private channels",
-    detail: "Discasa is creating or reusing the drive, index, folder, trash and config channels.",
+    detail: "Discasa is creating or reusing the media and index channels.",
   },
   {
     title: "Reading Discord snapshots",

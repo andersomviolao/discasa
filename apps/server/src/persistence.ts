@@ -41,8 +41,6 @@ export type ActiveStorageContext = {
   indexChannelName: string;
   folderChannelId: string;
   folderChannelName: string;
-  trashChannelId: string;
-  trashChannelName: string;
   configChannelId: string;
   configChannelName: string;
 };
@@ -127,8 +125,14 @@ type LegacyPersistedIndexSnapshot = {
   items: LibraryItem[];
 };
 
-type LegacyActiveStorage = Omit<ActiveStorageContext, "folderChannelId" | "folderChannelName" | "configChannelId" | "configChannelName"> &
-  Partial<Pick<ActiveStorageContext, "folderChannelId" | "folderChannelName" | "configChannelId" | "configChannelName">>;
+type LegacyActiveStorage = Omit<
+  ActiveStorageContext,
+  "folderChannelId" | "folderChannelName" | "configChannelId" | "configChannelName"
+> &
+  Partial<Pick<ActiveStorageContext, "folderChannelId" | "folderChannelName" | "configChannelId" | "configChannelName">> & {
+    trashChannelId?: string;
+    trashChannelName?: string;
+  };
 
 type LegacyMockDatabase = {
   albums?: LegacyPersistedAlbum[];
@@ -511,8 +515,6 @@ function isLegacyActiveStorage(raw: unknown): raw is LegacyActiveStorage {
     "driveChannelName",
     "indexChannelId",
     "indexChannelName",
-    "trashChannelId",
-    "trashChannelName",
   ].every((key) => typeof entry[key] === "string" && String(entry[key]).length > 0);
 }
 
@@ -527,11 +529,9 @@ function migrateLegacyActiveStorage(raw: LegacyActiveStorage): ActiveStorageCont
     indexChannelId: raw.indexChannelId,
     indexChannelName: raw.indexChannelName,
     folderChannelId: raw.folderChannelId && raw.folderChannelId.length > 0 ? raw.folderChannelId : raw.indexChannelId,
-    folderChannelName: raw.folderChannelName && raw.folderChannelName.length > 0 ? raw.folderChannelName : "discasa-folder",
-    trashChannelId: raw.trashChannelId,
-    trashChannelName: raw.trashChannelName,
+    folderChannelName: raw.folderChannelName && raw.folderChannelName.length > 0 ? raw.folderChannelName : raw.indexChannelName,
     configChannelId: raw.configChannelId && raw.configChannelId.length > 0 ? raw.configChannelId : raw.indexChannelId,
-    configChannelName: raw.configChannelName && raw.configChannelName.length > 0 ? raw.configChannelName : "discasa-config",
+    configChannelName: raw.configChannelName && raw.configChannelName.length > 0 ? raw.configChannelName : raw.indexChannelName,
   };
 }
 

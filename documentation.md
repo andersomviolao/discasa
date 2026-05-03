@@ -162,12 +162,12 @@ Discasa creates or reuses this private Discord structure:
 Discasa
   #discasa-drive
   #discasa-index
-  #discasa-trash
 ```
 
-- `discasa-drive`: active file attachments and chunk parts.
+- `discasa-drive`: all file attachments and chunk parts, including files currently marked as trashed in the app.
 - `discasa-index`: index, folder, config, and installation snapshots.
-- `discasa-trash`: retained for compatibility with older installations and any legacy storage already there. Current trash/restore behavior is logical index state and does not physically move attachments into this channel.
+
+New setup does not create, require, or display a Discord trash channel. Older installations may still contain a legacy `discasa-trash` channel; Discasa keeps enough compatibility to clean up storage messages already referenced there, but new uploads and trash/restore flows do not use it.
 
 The app treats Discord snapshots as durable remote state. The local backend persists local state first, then syncs snapshots through the bot. The bot stores the JSON it receives; it should not reinterpret product meaning.
 

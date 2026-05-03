@@ -64,7 +64,7 @@ const AUTH_APPLY_PROGRESS_STEP_MS = 1700;
 const AUTH_APPLY_PROGRESS_STEPS = [
   {
     title: "Preparing private channels",
-    detail: "Discasa is creating or reusing the drive, index, folder, trash and config channels.",
+    detail: "Discasa is creating or reusing the media and index channels.",
   },
   {
     title: "Reading Discord snapshots",
@@ -1103,7 +1103,7 @@ export function AuthSetupModal({
           <h2>Ready to configure {selectedGuildName ?? "the selected server"}</h2>
           <p>
             Discasa stores your library inside Discord. When you apply it, the app creates a dedicated category and the
-            channels below so your files, metadata and trash stay organized in that server.
+            channels below so your media files and metadata stay organized in that server.
           </p>
         </div>
 

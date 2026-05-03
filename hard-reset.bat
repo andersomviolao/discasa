@@ -30,10 +30,9 @@ echo - %%LOCALAPPDATA%%\%APP_ID%              ^(legacy Tauri cache^)
 echo - apps\server\.discasa-data              ^(legacy prototype storage^)
 echo.
 echo This does not delete Discord server channels.
-echo On the next setup, Discasa uses 3 Discord channels:
+echo On the next setup, Discasa uses 2 Discord channels:
 echo - discasa-drive
 echo - discasa-index
-echo - discasa-trash
 echo.
 choice /C YN /M "Continue"
 if errorlevel 2 (

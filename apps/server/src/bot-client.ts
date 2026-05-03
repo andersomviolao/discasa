@@ -707,14 +707,12 @@ async function resolveAttachmentReference(
 
 function getStorageCandidateChannelIds(
   context: ActiveStorageContext,
-  isTrashed: boolean,
+  _isTrashed: boolean,
   primaryChannelId?: string,
 ): string[] {
   return [
     primaryChannelId,
-    isTrashed ? context.trashChannelId : context.driveChannelId,
     context.driveChannelId,
-    context.trashChannelId,
   ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 }
 

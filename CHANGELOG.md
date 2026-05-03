@@ -2,6 +2,18 @@
 
 All notable changes to **Discasa** are documented in this file.
 
+## [2026-05-03-two-channel-discord-storage]
+
+### Changed
+
+- Removed the Discord trash channel from the active setup flow; Discasa now creates/reuses only `discasa-drive` and `discasa-index`.
+- Kept trash/restore as app-owned logical state while all media attachments remain stored in `discasa-drive`.
+- Updated setup/login UI, shared channel contracts, and documentation for the two-channel storage model.
+
+### Fixed
+
+- Preserved compatibility for old local storage contexts and legacy trash-channel message cleanup without requiring `discasa-trash` in new installations.
+
 ## [2026-05-03-gallery-footer-status]
 
 ### Changed

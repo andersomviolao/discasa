@@ -298,7 +298,6 @@ function getRemoteLibraryHydrationKey(context: NonNullable<ReturnType<typeof get
     context.driveChannelId,
     context.indexChannelId,
     context.folderChannelId,
-    context.trashChannelId,
     context.configChannelId,
   ].join(":");
 }
@@ -1038,7 +1037,6 @@ router.post("/discasa/initialize", async (request, response, next) => {
           result.driveChannelName,
           result.indexChannelName,
           result.folderChannelName,
-          result.trashChannelName,
           result.configChannelName,
         ]),
       ),

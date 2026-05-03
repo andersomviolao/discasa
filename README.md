@@ -15,7 +15,7 @@ The hosted Discord bot is maintained separately in the sibling `Discasa_bot` rep
 - Folder uploads that create albums from selected folders, plus nested folders inside albums.
 - Watched-folder imports and duplicate-file collection views.
 - Optimistic library actions so moves, removes, trash, restore, delete, favorite, and album changes appear immediately.
-- App-owned logical trash and restore, with Discord storage touched only for upload and permanent delete.
+- App-owned logical trash and restore, with all media stored in `discasa-drive` and Discord storage touched only for upload and permanent delete.
 - Debounced Discord snapshot sync so fast local actions do not trigger redundant remote writes.
 
 ## Layout

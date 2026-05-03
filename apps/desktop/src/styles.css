@@ -2307,7 +2307,7 @@ img {
 .thumbnail-zoom-control.floating {
   --thumbnail-zoom-progress: 50%;
   position: fixed;
-  right: calc(var(--size-24) + env(safe-area-inset-right));
+  right: calc(var(--space-6) + var(--size-24) + env(safe-area-inset-right));
   bottom: var(--size-24);
   z-index: var(--z-toast);
   display: inline-flex;
@@ -2317,7 +2317,7 @@ img {
   padding: 0 var(--size-10);
   border-radius: var(--radius-pill);
   border: var(--size-1) solid var(--border-soft);
-  background: var(--surface-toast);
+  background: var(--white-alpha-06);
   backdrop-filter: blur(var(--blur-6));
   color: var(--text-primary);
   white-space: nowrap;
@@ -2325,7 +2325,7 @@ img {
 }
 
 .thumbnail-zoom-control.floating:hover {
-  background: var(--surface-toast);
+  background: var(--white-alpha-08);
 }
 
 .thumbnail-zoom-icon {
